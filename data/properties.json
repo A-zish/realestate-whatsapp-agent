@@ -1,0 +1,32 @@
+[
+  {
+    "id": "DEMO-001",
+    "title": "DEMO 2BHK Apartment, Mansarovar (placeholder)",
+    "type": "2BHK",
+    "location": "Mansarovar, Jaipur",
+    "price": "₹45 lakh (demo)",
+    "media_urls": ["https://placehold.co/800x600.png?text=2BHK+Mansarovar"],
+    "available": "yes",
+    "note": "PLACEHOLDER DATA — replace with builder's real listings"
+  },
+  {
+    "id": "DEMO-002",
+    "title": "DEMO 3BHK Villa, Vaishali Nagar (placeholder)",
+    "type": "3BHK",
+    "location": "Vaishali Nagar, Jaipur",
+    "price": "₹1.2 crore (demo)",
+    "media_urls": ["https://placehold.co/800x600.png?text=3BHK+Vaishali"],
+    "available": "yes",
+    "note": "PLACEHOLDER DATA — replace with builder's real listings"
+  },
+  {
+    "id": "DEMO-003",
+    "title": "DEMO Residential Plot, Ajmer Road (placeholder)",
+    "type": "plot",
+    "location": "Ajmer Road, Jaipur",
+    "price": "₹30 lakh (demo)",
+    "media_urls": ["https://placehold.co/800x600.png?text=Plot+Ajmer+Road"],
+    "available": "yes",
+    "note": "PLACEHOLDER DATA — replace with builder's real listings"
+  }
+]

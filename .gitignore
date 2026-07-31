@@ -1,0 +1,28 @@
+# Secrets
+.env
+service_account.json
+*.pem
+
+# Tunnel binary + runtime logs
+cloudflared.exe
+*.log
+
+# Uploaded property photos (runtime data)
+data/media/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local Claude Code tooling config (machine-specific, not part of the app)
+.claude/
