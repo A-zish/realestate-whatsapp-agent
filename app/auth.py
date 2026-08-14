@@ -35,10 +35,30 @@ class NotAuthenticated(Exception):
     """Raised by get_current_account when there's no valid session."""
 
 
+def _check_ascii(name: str, value: str) -> None:
+    """HTTP headers must be ASCII. A stray character pasted into a hosting
+    dashboard (curly quote, invisible space, etc.) breaks the Supabase client
+    with a UnicodeEncodeError that looks unrelated to the real cause. Catch
+    it here with a precise report instead of a mystery crash deep in httpx."""
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError as e:
+        bad_char = value[e.start]
+        log.error(
+            "%s has a non-ASCII character at position %d (codepoint U+%04X). "
+            "length=%d. This is almost always a stray character introduced "
+            "when pasting into a dashboard — delete and re-paste the value.",
+            name, e.start, ord(bad_char), len(value),
+        )
+        raise
+
+
 def _get_supabase() -> Client:
     global _supabase_client
     if _supabase_client is None:
         config.require("SUPABASE_URL", "SUPABASE_ANON_KEY")
+        _check_ascii("SUPABASE_URL", config.SUPABASE_URL)
+        _check_ascii("SUPABASE_ANON_KEY", config.SUPABASE_ANON_KEY)
         _supabase_client = create_client(config.SUPABASE_URL, config.SUPABASE_ANON_KEY)
     return _supabase_client
 
