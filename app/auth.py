@@ -16,6 +16,7 @@ a redirect to /login via a registered exception handler.
 """
 import logging
 
+import httpx
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from supabase import Client, create_client
@@ -72,12 +73,35 @@ def sign_up(email: str, password: str) -> str:
     return resp.user.id
 
 
+def _raw_sign_in_diagnostic(email: str, password: str) -> None:
+    """Bypass the supabase-py client entirely and hit Supabase's REST auth
+    endpoint directly with httpx, logging the *raw* status/body byte-safely.
+    Ground truth when the client library's own exception formatting is
+    itself throwing (mystery UnicodeEncodeErrors with no useful message)."""
+    try:
+        r = httpx.post(
+            f"{config.SUPABASE_URL}/auth/v1/token",
+            params={"grant_type": "password"},
+            headers={"apikey": config.SUPABASE_ANON_KEY, "Content-Type": "application/json"},
+            json={"email": email, "password": password},
+            timeout=15,
+        )
+        safe_body = r.text.encode("ascii", errors="backslashreplace").decode("ascii")[:500]
+        log.error("RAW auth diagnostic: status=%d body=%s", r.status_code, safe_body)
+    except Exception as diag_e:  # noqa: BLE001 - this IS the diagnostic, must not itself crash silently
+        log.error("RAW auth diagnostic itself failed: %s: %s", type(diag_e).__name__, repr(diag_e))
+
+
 def sign_in(email: str, password: str) -> str:
     """Verify credentials against Supabase Auth. Returns the user id, or
     raises on invalid credentials."""
-    resp = _get_supabase().auth.sign_in_with_password(
-        {"email": email, "password": password}
-    )
+    try:
+        resp = _get_supabase().auth.sign_in_with_password(
+            {"email": email, "password": password}
+        )
+    except Exception:
+        _raw_sign_in_diagnostic(email, password)
+        raise
     if resp.user is None:
         raise ValueError("Invalid email or password.")
     return resp.user.id
