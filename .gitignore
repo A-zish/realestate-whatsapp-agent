@@ -2,6 +2,7 @@
 .env
 service_account.json
 *.pem
+passwords.txt
 
 # Tunnel binary + runtime logs
 cloudflared.exe

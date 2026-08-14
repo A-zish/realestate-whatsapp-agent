@@ -4,7 +4,9 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Applies any pending Alembic migrations on every deploy/restart before
+    # starting the server. Idempotent — no-ops if the schema is current.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: GROQ_API_KEY
@@ -17,17 +19,15 @@ services:
         sync: false
       - key: TWILIO_WHATSAPP_FROM
         value: "whatsapp:+14155238886"
-      - key: GOOGLE_SHEET_ID
+      - key: SUPABASE_URL
         sync: false
-      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+      - key: SUPABASE_ANON_KEY
         sync: false
-      - key: BUILDER_NAME
-        value: Rama RealEstate
-      - key: AGENT_NAME
-        value: Priya
-      - key: ADMIN_USER
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      - key: ADMIN_PASSWORD
+      - key: DATABASE_URL
         sync: false
-      - key: PUBLIC_BASE_URL
+      - key: SESSION_SECRET
         sync: false
+      - key: STORAGE_BUCKET
+        value: property-media

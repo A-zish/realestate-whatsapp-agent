@@ -8,3 +8,10 @@ google-auth>=2.29
 openpyxl>=3.1
 python-dotenv>=1.0
 python-multipart>=0.0.9
+
+# --- Multi-tenant SaaS foundation (Supabase: Postgres + Auth + Storage) ---
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+alembic>=1.13
+supabase>=2.6
+itsdangerous>=2.2

@@ -1,24 +1,22 @@
-"""The AI conversation agent (Phase 4).
+"""The AI conversation agent — multi-tenant (Phase S1/S2).
 
-Given a lead row and a new inbound WhatsApp message, this calls the LLM
+Given an account, a lead row, and a new inbound message, this calls the LLM
 (Groq, free tier) and returns a STRICT JSON action describing what to reply,
-whether to send a photo, what it extracted, the lead's score, status, and stage.
+what media to send, what it extracted, the lead's score, status, and stage.
 
-The LLM client is isolated here so the provider can be swapped (e.g. to Claude)
-without touching the webhook or the sheet code.
+Every call is scoped to one account: the system prompt is built from that
+account's own branding, city, custom instructions, and property inventory —
+never another tenant's. The LLM client itself is isolated here so the
+provider can be swapped (e.g. to Claude) without touching main.py or db.py.
 """
 import json
 import logging
-import os
 
 from groq import Groq
 
-from app import config
+from app import config, db
 
 log = logging.getLogger(__name__)
-
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-_PROPERTIES_PATH = os.path.join(_DATA_DIR, "properties.json")
 
 _client: Groq | None = None
 
@@ -33,7 +31,7 @@ _JSON_SCHEMA = """{
   "stage": "string"
 }"""
 
-_SYSTEM_TEMPLATE = """You are {agent}, an elite property consultant at {builder} in Jaipur — the kind of \
+_SYSTEM_TEMPLATE = """You are {agent}, an elite property consultant at {builder} in {city} — the kind of \
 salesperson who could sell to anyone because you're brilliant at reading people, not because you're pushy. \
 You're texting a lead on WhatsApp. You are a real person mid-conversation, not a bot reading a script. \
 Your goals, in order: (1) qualify the lead, (2) capture their location, property type, budget, and \
@@ -72,7 +70,9 @@ MEDIA RULES: only set send_media_urls when the lead's CURRENT message explicitly
 photo, picture, image, or video ("show me", "send pics", "any photos?"). Persuasion or informational \
 questions ("why should I buy it", "what's good about it", "tell me more") get answered in words only — \
 leave send_media_urls empty even if a photo was already shown earlier. Never invent properties, prices, \
-or availability beyond INVENTORY; each property's "media" field is its list of photo/video URLs.
+or availability beyond INVENTORY; each property's "media" field is its list of photo/video URLs. If \
+INVENTORY is empty, say so honestly and keep qualifying them (location/budget/timeline) rather than \
+inventing anything.
 
 PROPERTY TYPE OPTIONS: the very first time you ask what kind of property they want, offer a broad \
 canonical set covering the full range of real estate — not limited to whatever's currently in INVENTORY — \
@@ -88,44 +88,15 @@ status=visit_booked and confirm you'll have the team reach out.
 
 INVENTORY:
 {properties_json}
-
+{custom_instructions_block}
 Respond with ONLY a JSON object (no markdown, no prose) in this exact shape:
 {json_schema}"""
 
 
-def _normalize_property(p: dict) -> dict:
-    """Ensure a property dict has a uniform "media" list, whichever source it came from."""
-    p = dict(p)
-    if "media" not in p:
-        raw = p.get("media_urls", p.get("image_url", []))
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                raw = [raw] if raw else []
-        p["media"] = [str(u) for u in (raw or []) if u]
-    p.pop("media_urls", None)
-    return p
-
-
-def load_properties() -> list[dict]:
-    """Inventory the agent shows to leads.
-
-    Prefers the builder-editable `properties` tab in the Google Sheet; falls
-    back to the bundled demo JSON if the sheet tab is empty or unreachable.
-    Every returned property has a normalized "media" list.
-    """
-    try:
-        from app import sheets
-
-        rows = sheets.get_properties(only_available=True)
-        if rows:
-            return [_normalize_property(r) for r in rows]
-    except Exception as e:  # noqa: BLE001 - fall back to the seed file
-        log.warning("Could not load properties from sheet, using JSON: %s", e)
-
-    with open(_PROPERTIES_PATH, encoding="utf-8") as f:
-        return [_normalize_property(r) for r in json.load(f)]
+def load_properties(account_id) -> list[dict]:
+    """This account's inventory. Empty if they haven't added any yet — never
+    falls back to another tenant's (or demo) data."""
+    return db.get_properties(account_id, only_available=True)
 
 
 def _get_client() -> Groq:
@@ -136,11 +107,21 @@ def _get_client() -> Groq:
     return _client
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(account: dict) -> str:
+    custom = (account.get("custom_instructions") or "").strip()
+    custom_block = (
+        f"\nAdditional instructions from {account['agency_name']} (follow these too):\n{custom}\n"
+        if custom
+        else ""
+    )
     return _SYSTEM_TEMPLATE.format(
-        agent=config.AGENT_NAME,
-        builder=config.BUILDER_NAME,
-        properties_json=json.dumps(load_properties(), ensure_ascii=False, indent=2),
+        agent=account.get("agent_name") or "Priya",
+        builder=account["agency_name"],
+        city=account.get("city") or "the city",
+        properties_json=json.dumps(
+            load_properties(account["id"]), ensure_ascii=False, indent=2
+        ),
+        custom_instructions_block=custom_block,
         json_schema=_JSON_SCHEMA,
     )
 
@@ -164,20 +145,27 @@ def _parse_json(raw: str) -> dict:
         raise
 
 
-def run_agent(lead: dict, user_message: str) -> dict:
-    """Run one conversation turn.
-
-    Returns the parsed agent action dict, plus an extra "_history" key holding
-    the updated conversation history (list of {role, content}) to persist.
-    """
-    history: list[dict] = []
-    if lead.get("history_json"):
+def _extract_history(lead: dict) -> list[dict]:
+    """Postgres/db.py returns history_json as a real list already; stay
+    tolerant of a JSON string too (e.g. old data), never crash on either."""
+    raw = lead.get("history_json") or []
+    if isinstance(raw, str):
         try:
-            history = json.loads(lead["history_json"])
+            return json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            history = []
+            return []
+    return raw
 
-    messages = [{"role": "system", "content": build_system_prompt()}]
+
+def run_agent(account: dict, lead: dict, user_message: str) -> dict:
+    """Run one conversation turn for this account's lead.
+
+    Returns the parsed agent action dict, plus an extra "_history" key
+    (a plain list, ready to store directly in the JSONB history_json column).
+    """
+    history = _extract_history(lead)
+
+    messages = [{"role": "system", "content": build_system_prompt(account)}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
 
@@ -191,7 +179,7 @@ def run_agent(lead: dict, user_message: str) -> dict:
         response_format={"type": "json_object"},
     )
     raw = resp.choices[0].message.content or "{}"
-    log.info("Agent raw output: %s", raw)
+    log.info("Agent raw output (account=%s): %s", account.get("slug"), raw)
     action = _parse_json(raw)
 
     # Normalize a couple of fields and update history with this turn.

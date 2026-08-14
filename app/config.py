@@ -40,6 +40,19 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
 # e.g. https://xxxx.trycloudflare.com  (no trailing slash)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
+# --- Supabase (multi-tenant SaaS: Postgres + Auth + Storage) ---
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+# Service-role key: used ONLY server-side for Storage uploads (bypasses RLS
+# so the bucket needs no manual policy setup). Never expose to a browser.
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+# Direct Postgres connection string (from Supabase project settings), used by
+# SQLAlchemy for accounts/leads/properties. Distinct from Supabase's REST API.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+# Signs our own session cookie (itsdangerous) after Supabase verifies login.
+SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me")
+STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "property-media")
+
 
 def require(*names: str) -> None:
     """Raise a clear error if any required env var is missing."""

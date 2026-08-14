@@ -1,37 +1,120 @@
-"""HTML page builders for the admin panel and the web chat demo.
+"""HTML page builders for auth, the agency dashboard, and the web chat demo.
 
 Plain f-string templates (no template engine) — kept out of app/main.py so
-routing/logic stays readable.
+routing/logic stays readable. Every page that shows business data (leads,
+properties) takes the logged-in `account` dict and only ever renders that
+account's own data — callers in main.py are responsible for having already
+fetched account-scoped rows via app/db.py.
 """
-from app import config
 from app.utils import resolve_media_url
 
 _BASE_STYLE = """
 body{font-family:system-ui,Segoe UI,Arial;margin:0;background:#0f1220;color:#e8e9f0}
 .wrap{max-width:960px;margin:0 auto;padding:24px}
 h1{font-size:20px} h2{font-size:16px;margin-top:28px}
-.nav{display:flex;gap:14px;margin-bottom:18px}
+.nav{display:flex;gap:14px;align-items:center;margin-bottom:18px}
 .nav a{color:#9aa3ff;text-decoration:none;font-size:14px}
 .nav a:hover{text-decoration:underline}
+.nav form{background:none;padding:0;margin:0}
+.nav button.linklike{background:none;border:0;color:#9aa3ff;font-size:14px;cursor:pointer;padding:0;margin:0;text-decoration:none;font-weight:400}
+.nav button.linklike:hover{text-decoration:underline}
 .ok{background:#173a2a;border:1px solid #2e7d52;padding:10px 14px;border-radius:8px;margin:12px 0}
+.err{background:#3a1717;border:1px solid #7d2e2e;padding:10px 14px;border-radius:8px;margin:12px 0}
 table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
 td,th{padding:8px;border-bottom:1px solid #262a40;text-align:left;vertical-align:middle}
 th{color:#aeb2cc;font-weight:600}
 form{background:#171a2e;padding:16px;border-radius:12px;margin-top:12px}
 label{display:block;margin:8px 0 4px;font-size:13px;color:#aeb2cc}
-input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2a2f4a;background:#0f1220;color:#fff;box-sizing:border-box}
+input,select,textarea{width:100%;padding:9px;border-radius:8px;border:1px solid #2a2f4a;background:#0f1220;color:#fff;box-sizing:border-box;font-family:inherit}
 button{margin-top:14px;padding:10px 18px;border:0;border-radius:8px;background:#5b6cff;color:#fff;font-weight:600;cursor:pointer}
 small{color:#8a8fb0}
 .badge{padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;color:#0f1220}
+.authcard{max-width:380px;margin:60px auto}
+.authcard h1{text-align:center}
+.muted-link{display:block;text-align:center;margin-top:14px;font-size:13px}
+.muted-link a{color:#9aa3ff}
+.demo-link{background:#171a2e;border:1px dashed #3a3f5c;padding:12px 14px;border-radius:10px;margin:14px 0;font-size:13px}
+.demo-link code{color:#9aa3ff}
 """
 
-_NAV = (
-    '<div class="nav">'
-    '<a href="/admin/leads">📊 Leads Dashboard</a>'
-    '<a href="/admin/properties">🏠 Property Inventory</a>'
-    '<a href="/demo" target="_blank">💬 Open Web Demo</a>'
-    "</div>"
-)
+
+def _nav(active: str) -> str:
+    def link(href: str, label: str, key: str) -> str:
+        style = "font-weight:700;color:#fff" if key == active else ""
+        return f'<a href="{href}" style="{style}">{label}</a>'
+
+    return (
+        '<div class="nav">'
+        + link("/dashboard", "📊 Leads", "leads")
+        + link("/dashboard/properties", "🏠 Inventory", "properties")
+        + link("/dashboard/settings", "⚙️ Settings", "settings")
+        + '<form action="/logout" method="post" style="display:inline">'
+        '<button type="submit" class="linklike">Logout</button></form>'
+        "</div>"
+    )
+
+
+# --- Auth pages --------------------------------------------------------------
+
+
+def render_signup_page(error: str = "") -> str:
+    banner = f'<div class="err">{error}</div>' if error else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign up — RealEstate Lead Agent</title>
+    <style>{_BASE_STYLE}</style></head><body><div class="wrap authcard">
+    <h1>🏠 Create your agency account</h1>
+    {banner}
+    <form action="/signup" method="post">
+      <label>Agency name</label><input name="agency_name" required placeholder="Shree Builders">
+      <label>Email</label><input type="email" name="email" required>
+      <label>Password</label><input type="password" name="password" required minlength="6">
+      <button type="submit">Create account</button>
+    </form>
+    <p class="muted-link">Already have an account? <a href="/login">Log in</a></p>
+    </div></body></html>"""
+
+
+def render_login_page(error: str = "") -> str:
+    banner = f'<div class="err">{error}</div>' if error else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Log in — RealEstate Lead Agent</title>
+    <style>{_BASE_STYLE}</style></head><body><div class="wrap authcard">
+    <h1>🏠 Log in</h1>
+    {banner}
+    <form action="/login" method="post">
+      <label>Email</label><input type="email" name="email" required>
+      <label>Password</label><input type="password" name="password" required>
+      <button type="submit">Log in</button>
+    </form>
+    <p class="muted-link">New agency? <a href="/signup">Create an account</a></p>
+    </div></body></html>"""
+
+
+def render_settings_page(account: dict) -> str:
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{account['agency_name']} — Settings</title>
+    <style>{_BASE_STYLE}</style></head><body><div class="wrap">
+    {_nav('settings')}
+    <h1>⚙️ {account['agency_name']} — Settings</h1>
+    <div class="demo-link">Your shareable chat link: <code>/demo/{account['slug']}</code></div>
+    <form action="/dashboard/settings" method="post">
+      <label>Agency name (shown to leads)</label>
+      <input name="agency_name" value="{account['agency_name']}" required>
+      <label>AI agent's name (the human persona it uses)</label>
+      <input name="agent_name" value="{account.get('agent_name','Priya')}" required>
+      <label>City</label>
+      <input name="city" value="{account.get('city','')}">
+      <label>Custom instructions for your AI agent (optional)</label>
+      <textarea name="custom_instructions" rows="5" placeholder="e.g. Always mention our Diwali 5% discount. Push harder for site visits. Reply in Hindi if the lead does.">{account.get('custom_instructions','')}</textarea>
+      <button type="submit">Save</button>
+    </form>
+    </div></body></html>"""
+
+
+# --- Property inventory --------------------------------------------------
 
 
 _VIDEO_EXT = (".mp4", ".mov", ".webm")
@@ -49,15 +132,15 @@ def _media_thumb_html(url: str) -> str:
     return f'<img src="{url}" alt="" style="width:90px;height:70px;object-fit:cover;border-radius:6px">'
 
 
-def render_properties_page(rows: list[dict], message: str = "") -> str:
+def render_properties_page(rows: list[dict], account: dict, message: str = "") -> str:
     cards = ""
     for p in rows:
-        media = p.get("media") or ([resolve_media_url(p["image_url"])] if p.get("image_url") else [])
+        media = p.get("media") or []
         thumbs = "".join(_media_thumb_html(resolve_media_url(u) or u) for u in media) or "—"
         thumbs_wrapped = f'<div style="display:flex;gap:4px;flex-wrap:wrap">{thumbs}</div>' if media else "—"
         cards += f"""<tr>
           <td>{thumbs_wrapped}</td>
-          <td><b>{p.get('title','')}</b><br><small>{p.get('id','')}</small></td>
+          <td><b>{p.get('title','')}</b><br><small>{p.get('display_id','')}</small></td>
           <td>{p.get('type','')}</td>
           <td>{p.get('location','')}</td>
           <td>{p.get('price','')}</td>
@@ -68,13 +151,13 @@ def render_properties_page(rows: list[dict], message: str = "") -> str:
     banner = f'<div class="ok">{message}</div>' if message else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{config.BUILDER_NAME} — Inventory</title>
+    <title>{account['agency_name']} — Inventory</title>
     <style>{_BASE_STYLE}</style></head><body><div class="wrap">
-    {_NAV}
-    <h1>🏠 {config.BUILDER_NAME} — Property Inventory</h1>
+    {_nav('properties')}
+    <h1>🏠 {account['agency_name']} — Property Inventory</h1>
     {banner}
     <h2>Add a property</h2>
-    <form action="/admin/properties" method="post" enctype="multipart/form-data">
+    <form action="/dashboard/properties" method="post" enctype="multipart/form-data">
       <label>Title</label><input name="title" required placeholder="3BHK Apartment, Jagatpura">
       <label>Type</label>
       <select name="type" required>
@@ -93,15 +176,16 @@ def render_properties_page(rows: list[dict], message: str = "") -> str:
     <table><tr><th>Media</th><th>Title</th><th>Type</th><th>Location</th><th>Price</th><th>Available</th></tr>
     {cards or '<tr><td colspan=6><small>No properties yet — add one above.</small></td></tr>'}
     </table>
-    <p><small>Tip: you can also edit the <b>properties</b> tab in your Google Sheet directly — the
-    <code>media_urls</code> column holds a list of links, or just paste one plain URL.</small></p>
     </div></body></html>"""
+
+
+# --- Leads dashboard -------------------------------------------------------
 
 
 _SCORE_COLORS = {"HOT": "#ff6b6b", "WARM": "#f5c451", "COLD": "#8fa3c4"}
 
 
-def render_leads_page(leads: list[dict]) -> str:
+def render_leads_page(leads: list[dict], account: dict) -> str:
     rows_html = ""
     for lead in reversed(leads):  # newest first
         score = (lead.get("score") or "").strip()
@@ -126,24 +210,30 @@ def render_leads_page(leads: list[dict]) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="8">
-    <title>{config.BUILDER_NAME} — Leads Dashboard</title>
+    <title>{account['agency_name']} — Leads Dashboard</title>
     <style>{_BASE_STYLE}
     table{{font-size:12px}}
     </style></head><body><div class="wrap">
-    {_NAV}
-    <h1>📊 {config.BUILDER_NAME} — Leads Dashboard</h1>
+    {_nav('leads')}
+    <h1>📊 {account['agency_name']} — Leads Dashboard</h1>
+    <div class="demo-link">Share this link to bring in leads: <code>/demo/{account['slug']}</code></div>
     <p><small>Auto-refreshes every 8s · {len(leads)} lead(s) total</small></p>
     <table><tr>
       <th>Lead</th><th>Source</th><th>Status</th><th>Score</th><th>Stage</th>
       <th>Location</th><th>Type</th><th>Budget</th><th>Timeline</th><th>Last message</th><th>Updated</th>
     </tr>
-    {rows_html or '<tr><td colspan=11><small>No leads yet.</small></td></tr>'}
+    {rows_html or '<tr><td colspan=11><small>No leads yet — share your demo link above.</small></td></tr>'}
     </table>
     </div></body></html>"""
 
 
-def render_demo_chat_page() -> str:
-    builder = config.BUILDER_NAME
+# --- Web chat demo (public, per-account) -----------------------------------
+
+
+def render_demo_chat_page(account: dict) -> str:
+    builder = account["agency_name"]
+    agent_name = account.get("agent_name") or "Priya"
+    slug = account["slug"]
     return f"""<!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{builder} — Chat</title>
@@ -182,7 +272,7 @@ def render_demo_chat_page() -> str:
     </div></div>
     <div class="header">
       <div class="avatar">🏠</div>
-      <div><div class="title">{builder}</div><div class="sub">online · property assistant</div></div>
+      <div><div class="title">{builder}</div><div class="sub">online · {agent_name}, property assistant</div></div>
     </div>
     <div id="messages"></div>
     <div class="inputbar">
@@ -190,7 +280,8 @@ def render_demo_chat_page() -> str:
       <button onclick="send()">➤</button>
     </div>
     <script>
-      const SESSION_KEY = 'demo_session_id', NAME_KEY = 'demo_name';
+      const SLUG = {slug!r};
+      const SESSION_KEY = 'demo_session_id_' + SLUG, NAME_KEY = 'demo_name_' + SLUG;
       let sessionId = localStorage.getItem(SESSION_KEY);
       if (!sessionId) {{
         sessionId = 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2);
@@ -258,7 +349,7 @@ def render_demo_chat_page() -> str:
         localStorage.setItem(NAME_KEY, userName);
         modal.style.display = 'none';
         showTyping();
-        const res = await fetch('/demo/start', {{
+        const res = await fetch(`/demo/${{SLUG}}/start`, {{
           method: 'POST', headers: {{'Content-Type':'application/json'}},
           body: JSON.stringify({{session_id: sessionId, name: userName}})
         }});
@@ -281,7 +372,7 @@ def render_demo_chat_page() -> str:
         addBubble(text, 'out');
         showTyping();
         try {{
-          const res = await fetch('/demo/chat', {{
+          const res = await fetch(`/demo/${{SLUG}}/chat`, {{
             method: 'POST', headers: {{'Content-Type':'application/json'}},
             body: JSON.stringify({{session_id: sessionId, name: userName, message: text}})
           }});
@@ -297,7 +388,7 @@ def render_demo_chat_page() -> str:
 
       async function restoreOrPrompt() {{
         if (!userName) {{ modal.style.display = 'flex'; return; }}
-        const res = await fetch('/demo/history?session_id=' + encodeURIComponent(sessionId));
+        const res = await fetch(`/demo/${{SLUG}}/history?session_id=` + encodeURIComponent(sessionId));
         const data = await res.json();
         if (!data.exists) {{ modal.style.display = 'flex'; return; }}
         modal.style.display = 'none';

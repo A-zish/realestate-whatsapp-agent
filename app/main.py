@@ -1,25 +1,32 @@
-"""FastAPI app — Twilio WhatsApp webhook + web chat demo, both powered by the
-same AI agent and Google Sheet (Phase 4 + v2 web demo).
+"""FastAPI app — multi-tenant real estate lead agent (Phase S1/S2 SaaS).
 
-Two front doors into the same conversation engine:
-  - /webhook   Twilio posts inbound WhatsApp messages here (form-encoded).
-  - /demo      A shareable, WhatsApp-styled browser chat — no WhatsApp/Twilio
-               sandbox join needed. Same agent, same sheet, tagged
-               source='web-demo' with a synthetic (non-dialable) phone key.
+Any number of agencies ("accounts") can sign up. Each gets their own login,
+their own branded AI agent, their own leads/properties (Postgres via
+Supabase, strictly account_id-scoped everywhere — see app/db.py), and their
+own shareable web-chat link at /demo/<slug>.
 
-Inbound flow for either channel:
-  1. Look up the lead by phone (create the row if unknown).
-  2. Run the AI agent over the conversation history + the new message.
-  3. Reply (TwiML for Twilio, JSON for the web demo), including a property
-     photo if the agent chose one.
-  4. Persist extracted fields, score, status, stage, last message, and the
-     updated history back to the Google Sheet.
+Entry points:
+  - /signup, /login, /logout        real accounts (Supabase Auth + our own
+                                     session cookie — see app/auth.py)
+  - /dashboard, /dashboard/*        the logged-in agency's leads/properties/
+                                     settings (session-auth protected)
+  - /demo/<slug>                    a shareable, WhatsApp-styled browser
+                                     chat for one specific account — no
+                                     WhatsApp/Twilio sandbox needed
+  - /webhook                        Twilio's inbound WhatsApp webhook;
+                                     resolves which account owns the number
+                                     that was messaged
+
+Inbound flow for either channel (see run_conversation_turn):
+  1. Look up the lead by (account, phone); create the row if unknown.
+  2. Run the AI agent over that account's branding + conversation history.
+  3. Reply (TwiML for Twilio, JSON for the web demo), including any property
+     media the agent chose to send.
+  4. Persist extracted fields, score, status, stage, and history back to
+     Postgres, scoped to that account.
 """
-import json
 import logging
 import os
-import secrets
-import time
 
 from fastapi import (
     Depends,
@@ -33,12 +40,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 
-from app import agent, config, pages, sheets
+from app import agent, auth, db, pages, storage
+from app.auth import NotAuthenticated
 from app.messages import OPENER_TEMPLATE
 from app.utils import normalize_phone, resolve_media_url, web_session_phone
 
@@ -48,17 +54,19 @@ logging.basicConfig(
 )
 log = logging.getLogger("realestate")
 
-app = FastAPI(title="Real Estate WhatsApp Lead Agent")
+app = FastAPI(title="Real Estate Lead Agent (Multi-tenant)")
 
-# Folder where uploaded property photos live, served publicly at /media/<file>.
-_MEDIA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "media")
-os.makedirs(_MEDIA_DIR, exist_ok=True)
-app.mount("/media", StaticFiles(directory=_MEDIA_DIR), name="media")
+_ALLOWED_MEDIA_EXT = {".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"}
 
-# Fields the agent extracts -> sheet columns. Only non-empty values overwrite.
+# Fields the agent extracts -> lead columns. Only non-empty values overwrite.
 _EXTRACT_FIELDS = ("intent", "location_pref", "property_type", "budget", "timeline")
 # Placeholder values the model sometimes emits for "not learned yet" — ignore.
 _PLACEHOLDER_VALUES = {"not specified", "unknown", "none", "n/a", "na", "null", "tbd"}
+
+
+@app.exception_handler(NotAuthenticated)
+def _redirect_to_login(request: Request, exc: NotAuthenticated) -> Response:
+    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/health")
@@ -67,50 +75,22 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/webhook")
-async def webhook(
-    request: Request,
-    From: str = Form(default=""),
-    Body: str = Form(default=""),
-    ProfileName: str = Form(default=""),
-) -> Response:
-    """Twilio posts inbound WhatsApp messages here (form-encoded)."""
-    await request.form()  # ensures Twilio's payload is fully parsed/logged below
-    log.info("Inbound from %s: %r", From, Body)
-
-    phone = normalize_phone(From)
-    reply = run_conversation_turn(phone, Body, ProfileName, source="whatsapp-inbound")
-
-    twiml = MessagingResponse()
-    msg = twiml.message(reply["reply_text"])
-    for url in reply.get("send_media_urls", []):
-        resolved = resolve_media_url(url)
-        if resolved:
-            msg.media(resolved)
-    return Response(content=str(twiml), media_type="application/xml")
+# --- Core conversation engine, shared by Twilio + every account's web demo --
 
 
-def run_conversation_turn(phone: str, body: str, name: str, source: str) -> dict:
-    """Core agent turn, shared by the Twilio webhook and the web demo.
-
-    Returns {reply_text, send_media_urls}. `source` and `name` are only used
-    if this phone/session doesn't have a lead row yet.
-    """
-    lead = sheets.get_lead(phone)
+def run_conversation_turn(account: dict, phone: str, body: str, name: str, source: str) -> dict:
+    """One agent turn for one account's lead. Returns {reply_text, send_media_urls, quick_replies}."""
+    account_id = account["id"]
+    lead = db.get_lead(account_id, phone)
     if lead is None:
-        lead = sheets.upsert_lead(
-            {
-                "phone": phone,
-                "name": name or "",
-                "source": source,
-                "status": "contacted",
-            }
+        lead = db.upsert_lead(
+            account_id, {"phone": phone, "name": name or "", "source": source, "status": "contacted"}
         )
 
     try:
-        action = agent.run_agent(lead, body)
+        action = agent.run_agent(account, lead, body)
     except Exception as e:  # noqa: BLE001 - never leave the lead without a reply
-        log.exception("Agent failed for %s: %s", phone, e)
+        log.exception("Agent failed for %s (account=%s): %s", phone, account.get("slug"), e)
         return {
             "reply_text": "Sorry, I'm having a brief issue — could you send that again?",
             "send_media_urls": [],
@@ -129,9 +109,9 @@ def run_conversation_turn(phone: str, body: str, name: str, source: str) -> dict
         fields["score"] = action["score"]
     if action.get("stage"):
         fields["stage"] = action["stage"]
-    fields["history_json"] = json.dumps(action.get("_history", []), ensure_ascii=False)
+    fields["history_json"] = action.get("_history", [])  # JSONB column: store the list directly
 
-    sheets.update_lead_fields(phone, fields)
+    db.update_lead_fields(account_id, phone, fields)
 
     return {
         "reply_text": action.get("reply_text", "Thanks! How can I help?"),
@@ -140,97 +120,121 @@ def run_conversation_turn(phone: str, body: str, name: str, source: str) -> dict
     }
 
 
-# --- Web chat demo: same agent + sheet, no WhatsApp needed ------------------
+# --- Twilio WhatsApp webhook (single shared number for now — see S4) --------
 
 
-class DemoStartIn(BaseModel):
-    session_id: str
-    name: str
+@app.post("/webhook")
+async def webhook(
+    request: Request,
+    From: str = Form(default=""),
+    To: str = Form(default=""),
+    Body: str = Form(default=""),
+    ProfileName: str = Form(default=""),
+) -> Response:
+    """Twilio posts inbound WhatsApp messages here (form-encoded)."""
+    await request.form()  # ensures Twilio's payload is fully parsed/logged below
+    log.info("Inbound from %s to %s: %r", From, To, Body)
+
+    account = db.get_account_by_twilio_number(To)
+    twiml = MessagingResponse()
+    if account is None:
+        log.error("No account configured for WhatsApp number %s", To)
+        twiml.message("Sorry, this number isn't set up yet.")
+        return Response(content=str(twiml), media_type="application/xml")
+
+    phone = normalize_phone(From)
+    reply = run_conversation_turn(account, phone, Body, ProfileName, source="whatsapp-inbound")
+
+    msg = twiml.message(reply["reply_text"])
+    for url in reply.get("send_media_urls", []):
+        resolved = resolve_media_url(url)
+        if resolved:
+            msg.media(resolved)
+    return Response(content=str(twiml), media_type="application/xml")
 
 
-class DemoChatIn(BaseModel):
-    session_id: str
-    name: str = ""
-    message: str
+# --- Accounts: signup / login / logout --------------------------------------
 
 
-@app.get("/demo", response_class=HTMLResponse)
-def demo_page() -> str:
-    return pages.render_demo_chat_page()
-
-
-@app.post("/demo/start")
-def demo_start(payload: DemoStartIn) -> dict:
-    """Create the demo lead row and return the (static) opener text."""
-    phone = web_session_phone(payload.session_id)
-    name = payload.name.strip() or "there"
-    sheets.upsert_lead(
-        {"phone": phone, "name": name, "source": "web-demo", "status": "contacted"}
+def _set_session_cookie(response: Response, user_id: str, account_id: str) -> None:
+    response.set_cookie(
+        auth.SESSION_COOKIE_NAME,
+        auth.make_session_cookie_value(user_id, account_id),
+        max_age=auth.SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
     )
-    opener = OPENER_TEMPLATE.format(name=name, builder=config.BUILDER_NAME)
-    return {"reply_text": opener, "quick_replies": ["YES"]}
 
 
-@app.post("/demo/chat")
-def demo_chat(payload: DemoChatIn) -> dict:
-    phone = web_session_phone(payload.session_id)
-    reply = run_conversation_turn(phone, payload.message, payload.name, source="web-demo")
-    media = [resolve_media_url(u) for u in reply.get("send_media_urls", [])]
-    return {
-        "reply_text": reply["reply_text"],
-        "media_urls": [u for u in media if u],
-        "quick_replies": reply.get("quick_replies", []),
-    }
+@app.get("/signup", response_class=HTMLResponse)
+def signup_page() -> str:
+    return pages.render_signup_page()
 
 
-@app.get("/demo/history")
-def demo_history(session_id: str) -> dict:
-    """Let the browser rebuild the transcript after a page refresh."""
-    phone = web_session_phone(session_id)
-    lead = sheets.get_lead(phone)
-    if not lead:
-        return {"exists": False, "history": []}
-    history = []
-    if lead.get("history_json"):
-        try:
-            history = json.loads(lead["history_json"])
-        except (json.JSONDecodeError, TypeError):
-            history = []
-    return {"exists": True, "name": lead.get("name", ""), "history": history}
+@app.post("/signup")
+async def signup_submit(
+    agency_name: str = Form(...), email: str = Form(...), password: str = Form(...)
+) -> Response:
+    try:
+        user_id = auth.sign_up(email, password)
+    except Exception as e:  # noqa: BLE001 - show the signup form again with the error
+        return HTMLResponse(pages.render_signup_page(error=str(e)), status_code=400)
+
+    account = db.create_account(agency_name=agency_name)
+    db.link_user_to_account(user_id, account["id"])
+
+    resp = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    _set_session_cookie(resp, user_id, account["id"])
+    return resp
 
 
-# --- Admin panel: leads dashboard + property inventory ----------------------
+@app.get("/login", response_class=HTMLResponse)
+def login_page() -> str:
+    return pages.render_login_page()
 
-_security = HTTPBasic()
-_ALLOWED_MEDIA_EXT = {".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"}
 
+@app.post("/login")
+async def login_submit(email: str = Form(...), password: str = Form(...)) -> Response:
+    try:
+        user_id = auth.sign_in(email, password)
+    except Exception:  # noqa: BLE001 - never leak Supabase's raw error to the form
+        return HTMLResponse(pages.render_login_page(error="Invalid email or password."), status_code=401)
 
-def _require_admin(creds: HTTPBasicCredentials = Depends(_security)) -> str:
-    """HTTP Basic auth against ADMIN_USER / ADMIN_PASSWORD."""
-    ok_user = secrets.compare_digest(creds.username, config.ADMIN_USER)
-    ok_pass = secrets.compare_digest(creds.password, config.ADMIN_PASSWORD)
-    if not (ok_user and ok_pass):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
+    account_id = db.get_account_id_for_user(user_id)
+    if account_id is None:
+        return HTMLResponse(
+            pages.render_login_page(error="No agency account is linked to this login."),
+            status_code=400,
         )
-    return creds.username
+
+    resp = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    _set_session_cookie(resp, user_id, account_id)
+    return resp
 
 
-@app.get("/admin/leads", response_class=HTMLResponse)
-def admin_leads(_: str = Depends(_require_admin)) -> str:
-    return pages.render_leads_page(sheets.get_all_leads())
+@app.post("/logout")
+def logout() -> Response:
+    resp = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    resp.delete_cookie(auth.SESSION_COOKIE_NAME)
+    return resp
 
 
-@app.get("/admin/properties", response_class=HTMLResponse)
-def admin_properties(_: str = Depends(_require_admin)) -> str:
-    return pages.render_properties_page(sheets.get_properties(only_available=False))
+# --- Dashboard: leads / properties / settings (session-auth protected) ------
 
 
-@app.post("/admin/properties")
-async def admin_add_property(
-    _: str = Depends(_require_admin),
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(account: dict = Depends(auth.get_current_account)) -> str:
+    return pages.render_leads_page(db.get_all_leads(account["id"]), account)
+
+
+@app.get("/dashboard/properties", response_class=HTMLResponse)
+def dashboard_properties(account: dict = Depends(auth.get_current_account)) -> str:
+    return pages.render_properties_page(db.get_properties(account["id"], only_available=False), account)
+
+
+@app.post("/dashboard/properties")
+async def dashboard_add_property(
+    account: dict = Depends(auth.get_current_account),
     title: str = Form(...),
     type: str = Form(default=""),
     location: str = Form(default=""),
@@ -244,28 +248,106 @@ async def admin_add_property(
             continue
         ext = os.path.splitext(photo.filename)[1].lower()
         if ext not in _ALLOWED_MEDIA_EXT:
-            rows = sheets.get_properties(only_available=False)
+            rows = db.get_properties(account["id"], only_available=False)
             page = pages.render_properties_page(
                 rows,
-                f"⚠️ Unsupported file type '{ext}' ({photo.filename}). "
+                account,
+                message=f"⚠️ Unsupported file type '{ext}' ({photo.filename}). "
                 "Use jpg/png/webp for photos or mp4/mov/webm for video.",
             )
             return HTMLResponse(page, status_code=400)
-        fname = f"{int(time.time())}_{secrets.token_hex(3)}{ext}"
-        with open(os.path.join(_MEDIA_DIR, fname), "wb") as f:
-            f.write(await photo.read())
-        media_urls.append(f"media/{fname}")  # relative; resolved to absolute at send time
+        content = await photo.read()
+        url = storage.upload_media(
+            account["slug"], photo.filename, content, photo.content_type or "application/octet-stream"
+        )
+        media_urls.append(url)
 
-    sheets.add_property(
-        {
-            "title": title,
-            "type": type,
-            "location": location,
-            "price": price,
-            "media_urls": media_urls,
-            "available": available,
-        }
+    db.add_property(
+        account["id"],
+        {"title": title, "type": type, "location": location, "price": price,
+         "media_urls": media_urls, "available": available},
     )
-    return RedirectResponse(
-        url="/admin/properties", status_code=status.HTTP_303_SEE_OTHER
+    return RedirectResponse(url="/dashboard/properties", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/dashboard/settings", response_class=HTMLResponse)
+def dashboard_settings(account: dict = Depends(auth.get_current_account)) -> str:
+    return pages.render_settings_page(account)
+
+
+@app.post("/dashboard/settings")
+async def dashboard_settings_submit(
+    account: dict = Depends(auth.get_current_account),
+    agency_name: str = Form(...),
+    agent_name: str = Form(...),
+    city: str = Form(...),
+    custom_instructions: str = Form(default=""),
+) -> Response:
+    db.update_account(
+        account["id"],
+        {"agency_name": agency_name, "agent_name": agent_name, "city": city,
+         "custom_instructions": custom_instructions},
     )
+    return RedirectResponse(url="/dashboard/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Web chat demo: one shareable link per account, no WhatsApp needed ------
+
+
+class DemoStartIn(BaseModel):
+    session_id: str
+    name: str
+
+
+class DemoChatIn(BaseModel):
+    session_id: str
+    name: str = ""
+    message: str
+
+
+def _get_account_or_404(slug: str) -> dict:
+    account = db.get_account_by_slug(slug)
+    if account is None:
+        raise HTTPException(status_code=404, detail="No such agency demo link")
+    return account
+
+
+@app.get("/demo/{slug}", response_class=HTMLResponse)
+def demo_page(slug: str) -> str:
+    return pages.render_demo_chat_page(_get_account_or_404(slug))
+
+
+@app.post("/demo/{slug}/start")
+def demo_start(slug: str, payload: DemoStartIn) -> dict:
+    account = _get_account_or_404(slug)
+    phone = web_session_phone(payload.session_id)
+    name = payload.name.strip() or "there"
+    db.upsert_lead(
+        account["id"], {"phone": phone, "name": name, "source": "web-demo", "status": "contacted"}
+    )
+    opener = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
+    return {"reply_text": opener, "quick_replies": ["YES"]}
+
+
+@app.post("/demo/{slug}/chat")
+def demo_chat(slug: str, payload: DemoChatIn) -> dict:
+    account = _get_account_or_404(slug)
+    phone = web_session_phone(payload.session_id)
+    reply = run_conversation_turn(account, phone, payload.message, payload.name, source="web-demo")
+    media = [resolve_media_url(u) for u in reply.get("send_media_urls", [])]
+    return {
+        "reply_text": reply["reply_text"],
+        "media_urls": [u for u in media if u],
+        "quick_replies": reply.get("quick_replies", []),
+    }
+
+
+@app.get("/demo/{slug}/history")
+def demo_history(slug: str, session_id: str) -> dict:
+    """Let the browser rebuild the transcript after a page refresh."""
+    account = _get_account_or_404(slug)
+    phone = web_session_phone(session_id)
+    lead = db.get_lead(account["id"], phone)
+    if not lead:
+        return {"exists": False, "history": []}
+    return {"exists": True, "name": lead.get("name", ""), "history": lead.get("history_json") or []}
