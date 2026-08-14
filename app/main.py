@@ -197,7 +197,8 @@ def login_page() -> str:
 async def login_submit(email: str = Form(...), password: str = Form(...)) -> Response:
     try:
         user_id = auth.sign_in(email, password)
-    except Exception:  # noqa: BLE001 - never leak Supabase's raw error to the form
+    except Exception as e:  # noqa: BLE001 - never leak Supabase's raw error to the form
+        log.error("Login failed for %s: %s: %s", email, type(e).__name__, e)
         return HTMLResponse(pages.render_login_page(error="Invalid email or password."), status_code=401)
 
     account_id = db.get_account_id_for_user(user_id)
