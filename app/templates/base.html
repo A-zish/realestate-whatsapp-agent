@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ account.agency_name }}{% endblock %} · LeadPilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script>
+    // Applied before first paint so there's no light-mode flash on reload.
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">🏠</div>
+      <div class="brand-text">
+        <div class="brand-name">{{ account.agency_name }}</div>
+        <div class="brand-sub">LeadPilot</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item {% if active == 'overview' %}active{% endif %}" href="/dashboard">
+        <span class="ico">📊</span> Overview
+      </a>
+      <a class="nav-item {% if active == 'leads' %}active{% endif %}" href="/dashboard/leads">
+        <span class="ico">👥</span> Leads
+        {% if lead_count %}<span class="count num">{{ lead_count }}</span>{% endif %}
+      </a>
+      <a class="nav-item {% if active == 'properties' %}active{% endif %}" href="/dashboard/properties">
+        <span class="ico">🏢</span> Properties
+      </a>
+
+      <div class="nav-label">AI Agent</div>
+      <a class="nav-item {% if active == 'playground' %}active{% endif %}" href="/dashboard/playground">
+        <span class="ico">🧪</span> Test Agent
+      </a>
+      <a class="nav-item {% if active == 'settings' %}active{% endif %}" href="/dashboard/settings">
+        <span class="ico">⚙️</span> Settings
+      </a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <form action="/logout" method="post">
+        <button type="submit" class="btn btn-ghost btn-block btn-sm">Sign out</button>
+      </form>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button>
+      <div class="topbar-title">{% block heading %}{% endblock %}</div>
+      <div class="topbar-spacer"></div>
+      {% block topbar_actions %}{% endblock %}
+      <button class="icon-btn" onclick="toggleTheme()" aria-label="Toggle theme"><span data-theme-icon>🌙</span></button>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+</div>
+<script src="/static/js/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ "Create your account" if mode == "signup" else "Sign in" }} · LeadPilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script>
+    (function () {
+      try { var t = localStorage.getItem("theme"); if (t) document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+
+    <div class="auth-logo">
+      <div class="brand-mark">🏠</div>
+      <div class="auth-logo-text">LeadPilot</div>
+    </div>
+
+    <div class="card">
+      <div class="card-body" style="padding:26px">
+        <h1 class="auth-title">{{ "Create your account" if mode == "signup" else "Welcome back" }}</h1>
+        <p class="auth-sub">
+          {{ "Your AI sales agent, qualifying leads 24×7." if mode == "signup" else "Sign in to your lead dashboard." }}
+        </p>
+
+        {% if error %}<div class="alert alert-error">⚠️ {{ error }}</div>{% endif %}
+
+        {% if mode == "signup" %}
+        <form action="/signup" method="post">
+          <div class="field">
+            <label>Agency name</label>
+            <input class="input" name="agency_name" required placeholder="Shree Builders" autofocus>
+          </div>
+          <div class="field">
+            <label>Work email</label>
+            <input class="input" type="email" name="email" required placeholder="you@agency.com">
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input class="input" type="password" name="password" required minlength="6" placeholder="At least 6 characters">
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Create account</button>
+        </form>
+        <p class="auth-foot">Already have an account? <a href="/login">Sign in</a></p>
+
+        {% else %}
+        <form action="/login" method="post">
+          <div class="field">
+            <label>Email</label>
+            <input class="input" type="email" name="email" required autofocus>
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input class="input" type="password" name="password" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+        </form>
+        <p class="auth-foot">New here? <a href="/signup">Create an account</a></p>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

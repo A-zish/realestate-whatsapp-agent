@@ -214,6 +214,41 @@ def get_all_leads(account_id) -> list[dict]:
         return [_lead_to_dict(lead) for lead in leads]
 
 
+def get_lead_stats(account_id) -> dict:
+    """Aggregate counts for the Overview dashboard, in one pass over the
+    account's leads (small per-tenant volumes; no need for SQL aggregates yet).
+    """
+    leads = get_all_leads(account_id)
+    scores = {"HOT": 0, "WARM": 0, "COLD": 0, "UNSCORED": 0}
+    statuses: dict[str, int] = {}
+    sources: dict[str, int] = {}
+
+    for lead in leads:
+        score = (lead.get("score") or "").strip().upper()
+        scores[score if score in scores else "UNSCORED"] += 1
+        status = (lead.get("status") or "unknown").strip()
+        statuses[status] = statuses.get(status, 0) + 1
+        source = (lead.get("source") or "unknown").strip()
+        sources[source] = sources.get(source, 0) + 1
+
+    total = len(leads)
+    engaged = sum(1 for lead in leads if (lead.get("last_message") or "").strip())
+    return {
+        "total": total,
+        "hot": scores["HOT"],
+        "warm": scores["WARM"],
+        "cold": scores["COLD"],
+        "unscored": scores["UNSCORED"],
+        "visits_booked": statuses.get("visit_booked", 0),
+        "qualified": statuses.get("qualified", 0) + statuses.get("visit_booked", 0),
+        "engaged": engaged,
+        "engagement_rate": round(engaged / total * 100) if total else 0,
+        "statuses": statuses,
+        "sources": sources,
+        "recent": list(reversed(leads[-8:])),
+    }
+
+
 def upsert_lead(account_id, data: dict) -> dict:
     """Create a lead row, or merge fields into an existing one (key = phone within the account)."""
     if not data.get("phone"):

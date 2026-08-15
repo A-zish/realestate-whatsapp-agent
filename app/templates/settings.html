@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block heading %}Settings{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">Control how your AI agent introduces itself and how it sells.</p>
+  </div>
+</div>
+
+{% if saved %}<div class="alert alert-success">✓ Settings saved — your agent is already using them.</div>{% endif %}
+
+<div class="grid grid-2-1">
+
+  <div class="card">
+    <div class="card-head"><div><h2>Agent &amp; branding</h2><div class="sub">What leads see and hear from you</div></div></div>
+    <div class="card-body">
+      <form action="/dashboard/settings" method="post">
+        <div class="field">
+          <label>Agency name</label>
+          <input class="input" name="agency_name" value="{{ account.agency_name }}" required>
+          <div class="hint">Shown to leads: “Hi, this is <b>{{ account.agency_name }}</b>…”</div>
+        </div>
+        <div class="field">
+          <label>Agent name</label>
+          <input class="input" name="agent_name" value="{{ account.agent_name }}" required>
+          <div class="hint">Your AI's human persona. A real first name works best — leads engage more.</div>
+        </div>
+        <div class="field">
+          <label>City</label>
+          <input class="input" name="city" value="{{ account.city }}" placeholder="Jaipur">
+          <div class="hint">Helps the agent talk naturally about local areas.</div>
+        </div>
+        <div class="field">
+          <label>Custom instructions</label>
+          <textarea class="textarea" name="custom_instructions" rows="6"
+            placeholder="e.g. Always mention our Diwali 5% discount.&#10;Push harder for site visits on weekends.&#10;Reply in Hindi if the lead writes in Hindi.">{{ account.custom_instructions }}</textarea>
+          <div class="hint">Anything you'd tell a new sales hire. The agent follows these on every message.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><div><h2>Your lead link</h2></div></div>
+      <div class="card-body">
+        <div class="linkbox u-mb-16">
+          <code style="flex:1">{{ lead_link }}</code>
+          <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
+        </div>
+        <p class="u-muted u-sm">Every chat on this link becomes a scored lead. To test without saving anything, use <a href="/dashboard/playground" style="color:var(--accent);font-weight:600">Test agent</a>.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>WhatsApp</h2></div></div>
+      <div class="card-body">
+        {% if account.twilio_whatsapp_from %}
+          <div class="row u-mb-16"><span class="badge badge-accent"><span class="dot"></span>Connected</span></div>
+          <p class="u-muted u-sm">Number: <b>{{ account.twilio_whatsapp_from.replace('whatsapp:','') }}</b></p>
+        {% else %}
+          <div class="row u-mb-16"><span class="badge badge-neutral">Not connected</span></div>
+          <p class="u-muted u-sm">Your agent works on the web link today. Connecting a WhatsApp Business number lets it message leads directly — that needs Meta business verification.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

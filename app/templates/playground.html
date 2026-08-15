@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Test agent{% endblock %}
+{% block heading %}Test your AI agent{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>🧪 Test your AI agent</h1>
+    <p class="sub">Chat with your agent exactly as a lead would. Nothing here is saved — these messages never appear in your leads.</p>
+  </div>
+</div>
+
+<div class="grid grid-2-1">
+
+  <div class="card" style="overflow:hidden">
+    <div class="card-head">
+      <div class="row" style="gap:10px">
+        <div class="avatar" style="background:var(--accent); color:#fff">{{ (account.agent_name or "A")[:1]|upper }}</div>
+        <div>
+          <h2>{{ account.agent_name }} · {{ account.agency_name }}</h2>
+          <div class="sub"><span class="badge badge-neutral">Sandbox — not saved</span></div>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="resetChat()">Reset</button>
+    </div>
+
+    <div id="chat" style="height:460px; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:8px; background:var(--surface-2)"></div>
+
+    <div style="padding:12px; border-top:1px solid var(--border); display:flex; gap:8px">
+      <input id="msg" class="input" placeholder="Type like a lead would… e.g. “Looking for a 3BHK in Jaipur”"
+             onkeydown="if(event.key==='Enter')send()">
+      <button class="btn btn-primary" onclick="send()">Send</button>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><div><h2>Playground vs. lead link</h2></div></div>
+      <div class="card-body">
+        <div style="margin-bottom:16px">
+          <h3>🧪 This page</h3>
+          <p class="u-muted u-sm">For you and your team to test. Try objections, odd questions, budget changes — see how the agent responds. Nothing is stored.</p>
+        </div>
+        <div>
+          <h3>🔗 Your lead link</h3>
+          <p class="u-muted u-sm u-mb-16">The real one. Share it publicly — every chat becomes a scored lead in your dashboard.</p>
+          <div class="linkbox">
+            <code style="flex:1">{{ lead_link }}</code>
+            <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Try asking</h2></div></div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:7px">
+        {% for prompt in sample_prompts %}
+        <button class="btn btn-secondary btn-sm" style="justify-content:flex-start; text-align:left"
+                onclick="quick(this.textContent.trim())">{{ prompt }}</button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const chat = document.getElementById("chat");
+  let history = [];
+
+  function bubble(text, who, media) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "max-width:78%;padding:9px 13px;border-radius:12px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;" +
+      (who === "out"
+        ? "align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px"
+        : "align-self:flex-start;background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:3px");
+    wrap.textContent = text || "";
+    (media || []).forEach(function (url) {
+      const isVid = [".mp4", ".mov", ".webm"].some(e => url.toLowerCase().includes(e));
+      const el = document.createElement(isVid ? "video" : "img");
+      el.src = url;
+      if (isVid) el.controls = true;
+      el.style.cssText = "display:block;max-width:100%;border-radius:8px;margin-top:7px";
+      wrap.appendChild(el);
+    });
+    chat.appendChild(wrap);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function chips(options) {
+    document.getElementById("chips")?.remove();
+    if (!options || !options.length) return;
+    const row = document.createElement("div");
+    row.id = "chips";
+    row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start;margin-top:2px";
+    options.forEach(function (opt) {
+      const b = document.createElement("button");
+      b.className = "btn btn-secondary btn-sm";
+      b.textContent = opt;
+      b.onclick = function () { row.remove(); sendText(opt); };
+      row.appendChild(b);
+    });
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function typing(on) {
+    document.getElementById("typing")?.remove();
+    if (!on) return;
+    const t = document.createElement("div");
+    t.id = "typing";
+    t.style.cssText = "align-self:flex-start;padding:9px 13px;border-radius:12px;background:var(--surface);border:1px solid var(--border);font-size:13px;color:var(--text-subtle)";
+    t.textContent = "typing…";
+    chat.appendChild(t);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function send() {
+    const input = document.getElementById("msg");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    sendText(text);
+  }
+  function quick(text) { sendText(text); }
+
+  async function sendText(text) {
+    document.getElementById("chips")?.remove();
+    bubble(text, "out");
+    typing(true);
+    try {
+      const res = await fetch("/dashboard/playground/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, history: history })
+      });
+      const data = await res.json();
+      typing(false);
+      bubble(data.reply_text, "in", data.media_urls);
+      chips(data.quick_replies);
+      history = data.history;
+    } catch (e) {
+      typing(false);
+      bubble("(connection error — try again)", "in");
+    }
+  }
+
+  function resetChat() {
+    history = [];
+    chat.innerHTML = "";
+    bubble("👋 Say anything a real lead might say — I'll respond exactly as I would on WhatsApp.", "in");
+  }
+  resetChat();
+</script>
+{% endblock %}

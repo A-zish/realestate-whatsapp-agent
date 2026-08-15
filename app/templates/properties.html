@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Properties{% endblock %}
+{% block heading %}Properties{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Property inventory</h1>
+    <p class="sub">Your AI agent only ever shows leads what's listed here — it never invents a property or a price.</p>
+  </div>
+</div>
+
+{% if message %}<div class="alert alert-error">⚠️ {{ message }}</div>{% endif %}
+
+<div class="grid grid-2-1">
+
+  <div class="card">
+    <div class="card-head">
+      <div><h2>{{ rows|length }} propert{{ 'y' if rows|length == 1 else 'ies' }}</h2></div>
+    </div>
+    <div class="card-body tight">
+      {% if rows %}
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Media</th><th>Property</th><th>Type</th><th>Location</th><th>Price</th><th>Status</th></tr></thead>
+          <tbody>
+          {% for p in rows %}
+            <tr>
+              <td>
+                {% if p.media %}
+                <div class="row" style="gap:4px">
+                  {% for url in p.media[:3] %}
+                    {% if url.lower().endswith(('.mp4','.mov','.webm')) %}
+                      <video src="{{ url }}" muted style="width:56px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border)"></video>
+                    {% else %}
+                      <img src="{{ url }}" alt="" style="width:56px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+                    {% endif %}
+                  {% endfor %}
+                  {% if p.media|length > 3 %}<span class="badge badge-neutral">+{{ p.media|length - 3 }}</span>{% endif %}
+                </div>
+                {% else %}<span class="u-subtle">—</span>{% endif %}
+              </td>
+              <td>
+                <div class="cell-primary">{{ p.title }}</div>
+                <div class="cell-sub">{{ p.display_id }}</div>
+              </td>
+              <td class="cell-muted">{{ p.type or "—" }}</td>
+              <td class="cell-muted">{{ p.location or "—" }}</td>
+              <td class="cell-muted">{{ p.price or "—" }}</td>
+              <td>
+                {% if p.available in ['no','false','0','sold'] %}
+                  <span class="badge badge-neutral">Sold / hidden</span>
+                {% else %}
+                  <span class="badge badge-accent"><span class="dot"></span>Available</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon">🏗️</div>
+        <h3>No properties yet</h3>
+        <p>Add your first listing so the AI agent has something to show and recommend to leads.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>Add a property</h2><div class="sub">Photos and videos are sent to leads on WhatsApp</div></div></div>
+    <div class="card-body">
+      <form action="/dashboard/properties" method="post" enctype="multipart/form-data">
+        <div class="field">
+          <label>Title</label>
+          <input class="input" name="title" required placeholder="3BHK Apartment, Jagatpura">
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select class="select" name="type" required>
+            <option value="" disabled selected>Select type…</option>
+            {% for t in property_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Location</label>
+          <input class="input" name="location" placeholder="Jagatpura, Jaipur">
+        </div>
+        <div class="field">
+          <label>Price</label>
+          <input class="input" name="price" placeholder="₹60 lakh">
+        </div>
+        <div class="field">
+          <label>Availability</label>
+          <select class="select" name="available">
+            <option value="yes">Available</option>
+            <option value="no">Sold / hidden</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Photos &amp; videos</label>
+          <input class="file-input" type="file" name="photos" accept="image/*,video/mp4,video/quicktime,video/webm" multiple>
+          <div class="hint">JPG, PNG, WEBP, MP4, MOV or WEBM. Select multiple at once.</div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Add property</button>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

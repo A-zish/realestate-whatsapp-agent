@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block heading %}Overview{% endblock %}
+
+{% block topbar_actions %}
+<a href="/dashboard/playground" class="btn btn-secondary btn-sm">🧪 Test agent</a>
+<a href="{{ lead_link }}" target="_blank" class="btn btn-primary btn-sm">Open lead link ↗</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Good to see you 👋</h1>
+    <p class="sub">Here's how {{ account.agency_name }}'s AI agent is performing.</p>
+  </div>
+</div>
+
+<!-- KPI row -->
+<div class="grid grid-4 u-mb-24">
+  <div class="card stat">
+    <div class="stat-top">
+      <div class="stat-icon is-accent">👥</div>
+      <div class="stat-label">Total leads</div>
+    </div>
+    <div class="stat-value num">{{ stats.total }}</div>
+    <div class="stat-foot">{{ stats.engaged }} replied · {{ stats.engagement_rate }}% engaged</div>
+  </div>
+
+  <div class="card stat">
+    <div class="stat-top">
+      <div class="stat-icon is-hot">🔥</div>
+      <div class="stat-label">Hot leads</div>
+    </div>
+    <div class="stat-value num" style="color:var(--hot)">{{ stats.hot }}</div>
+    <div class="stat-foot">Budget + timeline confirmed</div>
+  </div>
+
+  <div class="card stat">
+    <div class="stat-top">
+      <div class="stat-icon is-warm">🌤️</div>
+      <div class="stat-label">Warm leads</div>
+    </div>
+    <div class="stat-value num" style="color:var(--warm)">{{ stats.warm }}</div>
+    <div class="stat-foot">Interested, still qualifying</div>
+  </div>
+
+  <div class="card stat">
+    <div class="stat-top">
+      <div class="stat-icon is-accent">📅</div>
+      <div class="stat-label">Site visits booked</div>
+    </div>
+    <div class="stat-value num" style="color:var(--accent)">{{ stats.visits_booked }}</div>
+    <div class="stat-foot">Ready for your sales team</div>
+  </div>
+</div>
+
+<div class="grid grid-2-1 u-mb-24">
+
+  <!-- Recent leads -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Recent leads</h2>
+        <div class="sub">Latest conversations your agent handled</div>
+      </div>
+      <a href="/dashboard/leads" class="btn btn-ghost btn-sm" style="margin-left:auto">View all →</a>
+    </div>
+    <div class="card-body tight">
+      {% if stats.recent %}
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Lead</th><th>Score</th><th>Looking for</th><th>Budget</th><th>Last message</th></tr>
+          </thead>
+          <tbody>
+          {% for lead in stats.recent %}
+            <tr>
+              <td>
+                <div class="cell-primary">{{ lead.name or "Unknown" }}</div>
+                <div class="cell-sub">{{ lead.source }}</div>
+              </td>
+              <td>
+                {% set s = (lead.score or "").upper() %}
+                {% if s == "HOT" %}<span class="badge badge-hot"><span class="dot"></span>HOT</span>
+                {% elif s == "WARM" %}<span class="badge badge-warm"><span class="dot"></span>WARM</span>
+                {% elif s == "COLD" %}<span class="badge badge-cold"><span class="dot"></span>COLD</span>
+                {% else %}<span class="badge badge-neutral">—</span>{% endif %}
+              </td>
+              <td class="cell-muted">{{ lead.property_type or "—" }}{% if lead.location_pref %}<div class="cell-sub">{{ lead.location_pref }}</div>{% endif %}</td>
+              <td class="cell-muted">{{ lead.budget or "—" }}</td>
+              <td class="cell-muted"><div class="truncate">{{ lead.last_message or "—" }}</div></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon">📭</div>
+        <h3>No leads yet</h3>
+        <p>Share your lead capture link, or import a list, and your AI agent will start qualifying automatically.</p>
+        <a href="/dashboard/leads" class="btn btn-primary btn-sm">Get your lead link</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right column -->
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><div><h2>Lead quality</h2><div class="sub">Scored by the AI agent</div></div></div>
+      <div class="card-body">
+        {% set total = stats.total or 1 %}
+        <div class="bar-row">
+          <div class="bar-label">🔥 Hot</div>
+          <div class="bar-track"><div class="bar-fill is-hot" style="width: {{ (stats.hot / total * 100) | round }}%"></div></div>
+          <div class="bar-value num">{{ stats.hot }}</div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">🌤️ Warm</div>
+          <div class="bar-track"><div class="bar-fill is-warm" style="width: {{ (stats.warm / total * 100) | round }}%"></div></div>
+          <div class="bar-value num">{{ stats.warm }}</div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">❄️ Cold</div>
+          <div class="bar-track"><div class="bar-fill is-cold" style="width: {{ (stats.cold / total * 100) | round }}%"></div></div>
+          <div class="bar-value num">{{ stats.cold }}</div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label u-subtle">Unscored</div>
+          <div class="bar-track"><div class="bar-fill" style="width: {{ (stats.unscored / total * 100) | round }}%; background: var(--border-strong)"></div></div>
+          <div class="bar-value num u-subtle">{{ stats.unscored }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Where leads come from</h2></div></div>
+      <div class="card-body">
+        {% if stats.sources %}
+          {% for source, count in stats.sources.items() %}
+          <div class="bar-row">
+            <div class="bar-label">{{ source }}</div>
+            <div class="bar-track"><div class="bar-fill is-accent" style="width: {{ (count / total * 100) | round }}%"></div></div>
+            <div class="bar-value num">{{ count }}</div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p class="u-muted u-sm">No sources yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Share section -->
+<div class="card">
+  <div class="card-head">
+    <div>
+      <h2>Bring in leads</h2>
+      <div class="sub">Anyone who opens this link starts a real conversation with your AI agent</div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="linkbox u-mb-16">
+      <span>🔗</span>
+      <code style="flex:1">{{ lead_link }}</code>
+      <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
+    </div>
+    <div class="grid grid-3">
+      <div>
+        <h3>📱 Google &amp; Meta Ads</h3>
+        <p class="u-muted u-sm">Use it as the landing page for your ad campaigns — every click becomes a qualified lead.</p>
+      </div>
+      <div>
+        <h3>💬 WhatsApp &amp; Instagram</h3>
+        <p class="u-muted u-sm">Put it in your bio or auto-reply so enquiries get answered instantly, 24×7.</p>
+      </div>
+      <div>
+        <h3>🖨️ Hoardings &amp; brochures</h3>
+        <p class="u-muted u-sm">Turn it into a QR code for site boards and print material.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

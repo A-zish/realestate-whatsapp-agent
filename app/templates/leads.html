@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Leads{% endblock %}
+{% block heading %}Leads{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ lead_link }}" target="_blank" class="btn btn-secondary btn-sm">Open lead link ↗</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Leads</h1>
+    <p class="sub">Every conversation your AI agent has had, scored and qualified automatically.</p>
+  </div>
+  <div class="page-head-actions">
+    <span class="badge badge-hot"><span class="dot"></span>{{ stats.hot }} hot</span>
+    <span class="badge badge-warm"><span class="dot"></span>{{ stats.warm }} warm</span>
+    <span class="badge badge-cold"><span class="dot"></span>{{ stats.cold }} cold</span>
+  </div>
+</div>
+
+<div class="card u-mb-16">
+  <div class="card-body" style="padding:12px 14px">
+    <form method="get" class="row" style="gap:8px; flex-wrap:wrap">
+      <input class="input" name="q" value="{{ q or '' }}" placeholder="Search name, phone, location…" style="flex:1; min-width:200px">
+      <select class="select" name="score" style="width:auto; min-width:130px">
+        <option value="">All scores</option>
+        <option value="HOT"  {% if score_filter == 'HOT' %}selected{% endif %}>🔥 Hot</option>
+        <option value="WARM" {% if score_filter == 'WARM' %}selected{% endif %}>🌤️ Warm</option>
+        <option value="COLD" {% if score_filter == 'COLD' %}selected{% endif %}>❄️ Cold</option>
+      </select>
+      <select class="select" name="status" style="width:auto; min-width:150px">
+        <option value="">All statuses</option>
+        {% for s in all_statuses %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s.replace('_',' ')|title }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      {% if q or score_filter or status_filter %}
+      <a href="/dashboard/leads" class="btn btn-ghost btn-sm">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <div><h2>{{ leads|length }} lead{{ '' if leads|length == 1 else 's' }}</h2></div>
+    <div style="margin-left:auto" class="u-sm u-subtle">Auto-refreshes every 15s</div>
+  </div>
+  <div class="card-body tight">
+    {% if leads %}
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Lead</th><th>Score</th><th>Status</th><th>Looking for</th>
+            <th>Budget</th><th>Timeline</th><th>Last message</th><th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for lead in leads %}
+          <tr>
+            <td>
+              <div class="row" style="gap:9px">
+                <div class="avatar">{{ (lead.name or "?")[:1]|upper }}</div>
+                <div>
+                  <div class="cell-primary">{{ lead.name or "Unknown" }}</div>
+                  <div class="cell-sub">{{ lead.phone }}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              {% set s = (lead.score or "").upper() %}
+              {% if s == "HOT" %}<span class="badge badge-hot"><span class="dot"></span>HOT</span>
+              {% elif s == "WARM" %}<span class="badge badge-warm"><span class="dot"></span>WARM</span>
+              {% elif s == "COLD" %}<span class="badge badge-cold"><span class="dot"></span>COLD</span>
+              {% else %}<span class="badge badge-neutral">—</span>{% endif %}
+            </td>
+            <td>
+              {% if lead.status == 'visit_booked' %}<span class="badge badge-accent">✓ Visit booked</span>
+              {% elif lead.status == 'qualified' %}<span class="badge badge-info">Qualified</span>
+              {% else %}<span class="cell-muted">{{ (lead.status or '—').replace('_',' ')|title }}</span>{% endif %}
+            </td>
+            <td class="cell-muted">
+              {{ lead.property_type or "—" }}
+              {% if lead.location_pref %}<div class="cell-sub">📍 {{ lead.location_pref }}</div>{% endif %}
+            </td>
+            <td class="cell-muted">{{ lead.budget or "—" }}</td>
+            <td class="cell-muted">{{ lead.timeline or "—" }}</td>
+            <td class="cell-muted"><div class="truncate">{{ lead.last_message or "—" }}</div></td>
+            <td class="cell-sub" style="white-space:nowrap">{{ lead.updated_at[:16].replace("T"," ") if lead.updated_at else "—" }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% elif q or score_filter or status_filter %}
+    <div class="empty">
+      <div class="empty-icon">🔍</div>
+      <h3>No leads match those filters</h3>
+      <p>Try clearing the search or choosing a different score.</p>
+      <a href="/dashboard/leads" class="btn btn-secondary btn-sm">Clear filters</a>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">📭</div>
+      <h3>No leads yet</h3>
+      <p>Share your lead capture link anywhere — ads, Instagram bio, WhatsApp, a QR code on a hoarding — and every enquiry lands here, already qualified.</p>
+      <div class="linkbox" style="max-width:520px; margin:0 auto">
+        <span>🔗</span>
+        <code style="flex:1">{{ lead_link }}</code>
+        <button class="btn btn-primary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy link</button>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Light-touch auto refresh; skipped while the user is typing in a filter.
+  setInterval(function () {
+    if (document.activeElement && ["INPUT","SELECT"].includes(document.activeElement.tagName)) return;
+    location.reload();
+  }, 15000);
+</script>
+{% endblock %}
