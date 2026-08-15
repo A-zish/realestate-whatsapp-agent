@@ -39,11 +39,10 @@ def main() -> None:
         print(f"Linked WhatsApp number: {config.TWILIO_WHATSAPP_FROM}")
 
     try:
-        user_id = auth.sign_up(email, password)
-        db.link_user_to_account(user_id, account["id"])
+        auth.sign_up(email, password, account["id"])
         print(f"Created login for {email} -> account {account['slug']}")
-    except Exception as e:  # noqa: BLE001 - likely "already registered", fine on re-run
-        print(f"Signup skipped ({e}) — if this account exists, log in with it directly.")
+    except auth.AuthError as e:
+        print(f"Signup skipped ({e}) — if this login exists already, use it directly.")
 
     existing_props = db.get_properties(account["id"], only_available=False)
     if existing_props:

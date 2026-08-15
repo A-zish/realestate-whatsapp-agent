@@ -37,9 +37,7 @@ assert r.status_code == 200 and "Rama RealEstate" in r.text
 r = c.get("/dashboard/properties", cookies=rama_cookies)
 print("Rama properties page:", r.status_code, "has 3 properties:", r.text.count("DEMO") >= 1)
 
-# --- 2. Log in as the second agency (created via admin API to sidestep
-#        today's Supabase free-tier email-confirmation rate limit; the
-#        /signup route itself was already proven working for Rama's account) ---
+# --- 2. Log in as the second agency ---
 r = c.post(
     "/login",
     data={"email": "owner@skylineestates.com", "password": "Skyline!2026"},
@@ -48,6 +46,29 @@ r = c.post(
 print("Skyline login:", r.status_code, r.headers.get("location"))
 assert r.status_code == 303, f"login failed: {r.text[:300]}"
 skyline_cookies = r.cookies
+
+# --- 2b. A brand-new agency can sign up through the real /signup form ---
+import secrets as _secrets
+new_email = f"test-{_secrets.token_hex(4)}@example.com"
+r = c.post(
+    "/signup",
+    data={"agency_name": "Signup Flow Test Realty", "email": new_email, "password": "TestPass!2026"},
+    follow_redirects=False,
+)
+print("fresh signup:", r.status_code, r.headers.get("location"))
+assert r.status_code == 303, f"signup failed: {r.text[:300]}"
+# duplicate email must be rejected
+r = c.post(
+    "/signup",
+    data={"agency_name": "Dupe", "email": new_email, "password": "TestPass!2026"},
+    follow_redirects=False,
+)
+print("duplicate signup rejected:", r.status_code == 400)
+assert r.status_code == 400
+# wrong password must be rejected
+r = c.post("/login", data={"email": new_email, "password": "wrongpass"}, follow_redirects=False)
+print("wrong password rejected:", r.status_code == 401)
+assert r.status_code == 401
 
 r = c.get("/dashboard", cookies=skyline_cookies)
 print("Skyline dashboard:", r.status_code, "mentions Skyline:", "Skyline Estates" in r.text,

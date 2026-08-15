@@ -16,7 +16,7 @@ app/agent.py stay easy to read, but everything is account-scoped:
     add_property(account_id, data)                 -> dict
     get_account_by_slug(slug) / by_id(id) / by_twilio_number(to)
     create_account(agency_name) / update_account(account_id, fields)
-    get_account_id_for_user(user_id) / link_user_to_account(user_id, account_id)
+    get_user_by_email(email) / create_user(...) / get_account_id_for_user(id)
 """
 import logging
 import re
@@ -28,7 +28,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app import config
-from app.models import Account, Lead, Profile, Property
+from app.models import Account, Lead, Property, User
 from app.utils import normalize_phone
 
 log = logging.getLogger(__name__)
@@ -134,19 +134,39 @@ def update_account(account_id, fields: dict) -> dict:
         return _account_to_dict(account)
 
 
-# --- Profiles (user -> account link) -----------------------------------------
+# --- Users (logins) ----------------------------------------------------------
+
+
+def _user_to_dict(u: User) -> dict:
+    return {
+        "id": str(u.id),
+        "email": u.email,
+        "password_hash": u.password_hash,
+        "account_id": str(u.account_id),
+    }
+
+
+def get_user_by_email(email: str) -> dict | None:
+    with _session() as session:
+        user = session.scalar(select(User).where(User.email == email))
+        return _user_to_dict(user) if user else None
+
+
+def create_user(email: str, password_hash: str, account_id) -> dict:
+    with _session() as session:
+        user = User(
+            id=uuid.uuid4(), email=email, password_hash=password_hash, account_id=account_id
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return _user_to_dict(user)
 
 
 def get_account_id_for_user(user_id) -> str | None:
     with _session() as session:
-        profile = session.get(Profile, user_id)
-        return str(profile.account_id) if profile else None
-
-
-def link_user_to_account(user_id, account_id) -> None:
-    with _session() as session:
-        session.add(Profile(user_id=user_id, account_id=account_id))
-        session.commit()
+        user = session.get(User, user_id)
+        return str(user.account_id) if user else None
 
 
 # --- Leads ---------------------------------------------------------------

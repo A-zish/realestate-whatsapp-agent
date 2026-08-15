@@ -1,11 +1,15 @@
-"""Auth: Supabase verifies credentials, we own the ongoing session.
+"""Auth: self-hosted, standard-library only.
 
-Split responsibility on purpose:
-  - Supabase Auth handles signup/login verification, password hashing, and
-    (later) password-reset emails — we never store or check a password.
-  - Once verified, THIS app mints its own signed cookie (itsdangerous) that
-    just holds {user_id, account_id}. Ongoing requests only need to verify
-    that cookie, not talk to Supabase or juggle JWT refresh tokens.
+Passwords are hashed with PBKDF2-HMAC-SHA256 (the same primitive Django and
+Werkzeug use by default) and verified in constant time. Sessions are a signed
+cookie (itsdangerous) holding {user_id, account_id}, valid ~7 days.
+
+Why not an external auth service: we tried one and it cost us three separate
+production failures — email-confirmation friction on every signup, a signup
+rate limit, and an opaque UnicodeEncodeError inside the client library that
+only reproduced on the host. None of that buys anything here: hashing a
+password is a solved stdlib problem with no network hop and identical
+behaviour locally and in production.
 
 FastAPI usage:
     @app.get("/dashboard")
@@ -14,12 +18,13 @@ FastAPI usage:
 Unauthenticated access raises NotAuthenticated, which app/main.py turns into
 a redirect to /login via a registered exception handler.
 """
+import hashlib
+import hmac
 import logging
+import secrets
 
-import httpx
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from supabase import Client, create_client
 
 from app import config, db
 
@@ -29,82 +34,66 @@ SESSION_COOKIE_NAME = "session"
 SESSION_MAX_AGE = 7 * 24 * 3600  # 7 days
 _SALT = "realestate-saas-session"
 
-_supabase_client: Client | None = None
+# OWASP-recommended floor for PBKDF2-HMAC-SHA256 (2023 guidance).
+_PBKDF2_ITERATIONS = 600_000
+_HASH_PREFIX = "pbkdf2_sha256"
 
 
 class NotAuthenticated(Exception):
     """Raised by get_current_account when there's no valid session."""
 
 
-def _check_ascii(name: str, value: str) -> None:
-    """HTTP headers must be ASCII. A stray character pasted into a hosting
-    dashboard (curly quote, invisible space, etc.) breaks the Supabase client
-    with a UnicodeEncodeError that looks unrelated to the real cause. Catch
-    it here with a precise report instead of a mystery crash deep in httpx."""
+class AuthError(Exception):
+    """Signup/login failed for a reason we can safely show the user."""
+
+
+def hash_password(password: str, *, iterations: int = _PBKDF2_ITERATIONS) -> str:
+    """Return a self-describing hash string: algo$iterations$salt_hex$hash_hex.
+
+    Storing the parameters alongside the hash means the iteration count can be
+    raised later without invalidating existing passwords.
+    """
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return f"{_HASH_PREFIX}${iterations}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Constant-time verify against a hash produced by hash_password."""
     try:
-        value.encode("ascii")
-    except UnicodeEncodeError as e:
-        bad_char = value[e.start]
-        log.error(
-            "%s has a non-ASCII character at position %d (codepoint U+%04X). "
-            "length=%d. This is almost always a stray character introduced "
-            "when pasting into a dashboard — delete and re-paste the value.",
-            name, e.start, ord(bad_char), len(value),
+        prefix, iterations_s, salt_hex, hash_hex = stored.split("$")
+        if prefix != _HASH_PREFIX:
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations_s)
         )
-        raise
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(digest.hex(), hash_hex)
 
 
-def _get_supabase() -> Client:
-    global _supabase_client
-    if _supabase_client is None:
-        config.require("SUPABASE_URL", "SUPABASE_ANON_KEY")
-        _check_ascii("SUPABASE_URL", config.SUPABASE_URL)
-        _check_ascii("SUPABASE_ANON_KEY", config.SUPABASE_ANON_KEY)
-        _supabase_client = create_client(config.SUPABASE_URL, config.SUPABASE_ANON_KEY)
-    return _supabase_client
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
 
 
-def sign_up(email: str, password: str) -> str:
-    """Create a Supabase Auth user. Returns their user id. Raises on failure
-    (e.g. email already registered, weak password) — caller shows the error."""
-    resp = _get_supabase().auth.sign_up({"email": email, "password": password})
-    if resp.user is None:
-        raise ValueError("Signup failed — check the email/password and try again.")
-    return resp.user.id
-
-
-def _raw_sign_in_diagnostic(email: str, password: str) -> None:
-    """Bypass the supabase-py client entirely and hit Supabase's REST auth
-    endpoint directly with httpx, logging the *raw* status/body byte-safely.
-    Ground truth when the client library's own exception formatting is
-    itself throwing (mystery UnicodeEncodeErrors with no useful message)."""
-    try:
-        r = httpx.post(
-            f"{config.SUPABASE_URL}/auth/v1/token",
-            params={"grant_type": "password"},
-            headers={"apikey": config.SUPABASE_ANON_KEY, "Content-Type": "application/json"},
-            json={"email": email, "password": password},
-            timeout=15,
-        )
-        safe_body = r.text.encode("ascii", errors="backslashreplace").decode("ascii")[:500]
-        log.error("RAW auth diagnostic: status=%d body=%s", r.status_code, safe_body)
-    except Exception as diag_e:  # noqa: BLE001 - this IS the diagnostic, must not itself crash silently
-        log.error("RAW auth diagnostic itself failed: %s: %s", type(diag_e).__name__, repr(diag_e))
+def sign_up(email: str, password: str, account_id) -> str:
+    """Create a login for an account. Returns the new user id."""
+    email = normalize_email(email)
+    if len(password) < 6:
+        raise AuthError("Password must be at least 6 characters.")
+    if db.get_user_by_email(email) is not None:
+        raise AuthError("That email is already registered.")
+    user = db.create_user(email, hash_password(password), account_id)
+    log.info("Created login %s for account %s", email, account_id)
+    return user["id"]
 
 
 def sign_in(email: str, password: str) -> str:
-    """Verify credentials against Supabase Auth. Returns the user id, or
-    raises on invalid credentials."""
-    try:
-        resp = _get_supabase().auth.sign_in_with_password(
-            {"email": email, "password": password}
-        )
-    except Exception:
-        _raw_sign_in_diagnostic(email, password)
-        raise
-    if resp.user is None:
-        raise ValueError("Invalid email or password.")
-    return resp.user.id
+    """Verify credentials. Returns the user id, or raises AuthError."""
+    user = db.get_user_by_email(normalize_email(email))
+    if user is None or not verify_password(password, user["password_hash"]):
+        raise AuthError("Invalid email or password.")
+    return user["id"]
 
 
 def _serializer() -> URLSafeTimedSerializer:

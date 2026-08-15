@@ -175,13 +175,25 @@ def signup_page() -> str:
 async def signup_submit(
     agency_name: str = Form(...), email: str = Form(...), password: str = Form(...)
 ) -> Response:
-    try:
-        user_id = auth.sign_up(email, password)
-    except Exception as e:  # noqa: BLE001 - show the signup form again with the error
-        return HTMLResponse(pages.render_signup_page(error=str(e)), status_code=400)
+    # Validate the login BEFORE creating the account, so a rejected signup
+    # (duplicate email, weak password) doesn't leave an orphaned account.
+    email_norm = auth.normalize_email(email)
+    if db.get_user_by_email(email_norm) is not None:
+        return HTMLResponse(
+            pages.render_signup_page(error="That email is already registered."),
+            status_code=400,
+        )
+    if len(password) < 6:
+        return HTMLResponse(
+            pages.render_signup_page(error="Password must be at least 6 characters."),
+            status_code=400,
+        )
 
     account = db.create_account(agency_name=agency_name)
-    db.link_user_to_account(user_id, account["id"])
+    try:
+        user_id = auth.sign_up(email_norm, password, account["id"])
+    except auth.AuthError as e:
+        return HTMLResponse(pages.render_signup_page(error=str(e)), status_code=400)
 
     resp = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     _set_session_cookie(resp, user_id, account["id"])
@@ -197,9 +209,10 @@ def login_page() -> str:
 async def login_submit(email: str = Form(...), password: str = Form(...)) -> Response:
     try:
         user_id = auth.sign_in(email, password)
-    except Exception as e:  # noqa: BLE001 - never leak Supabase's raw error to the form
-        log.error("Login failed for %s: %s: %s", email, type(e).__name__, e)
-        return HTMLResponse(pages.render_login_page(error="Invalid email or password."), status_code=401)
+    except auth.AuthError:
+        return HTMLResponse(
+            pages.render_login_page(error="Invalid email or password."), status_code=401
+        )
 
     account_id = db.get_account_id_for_user(user_id)
     if account_id is None:

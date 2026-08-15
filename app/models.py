@@ -45,12 +45,20 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
-class Profile(Base):
-    """Links a Supabase Auth user to the one account they belong to."""
+class User(Base):
+    """A login for one account. Passwords are hashed with PBKDF2-HMAC-SHA256
+    (Python stdlib) — see app/auth.py. We deliberately do NOT use an external
+    auth service: it added a fragile network hop for something the stdlib
+    does well, and cost us email-confirmation friction, signup rate limits,
+    and an opaque encoding crash in production."""
 
-    __tablename__ = "profiles"
+    __tablename__ = "users"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
     )
