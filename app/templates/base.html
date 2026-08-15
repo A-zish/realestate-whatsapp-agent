@@ -39,8 +39,19 @@
         <span class="ico">👥</span> Leads
         {% if lead_count %}<span class="count num">{{ lead_count }}</span>{% endif %}
       </a>
+      <a class="nav-item {% if active == 'import' %}active{% endif %}" href="/dashboard/import">
+        <span class="ico">📥</span> Import Leads
+      </a>
       <a class="nav-item {% if active == 'properties' %}active{% endif %}" href="/dashboard/properties">
         <span class="ico">🏢</span> Properties
+      </a>
+
+      <div class="nav-label">Channels</div>
+      <a class="nav-item {% if active == 'whatsapp' %}active{% endif %}" href="/dashboard/whatsapp">
+        <span class="ico">💬</span> WhatsApp
+        {% if account.whatsapp_status == 'connected' %}
+          <span class="count" style="background:var(--accent);color:#fff">on</span>
+        {% endif %}
       </a>
 
       <div class="nav-label">AI Agent</div>

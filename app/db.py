@@ -61,6 +61,8 @@ def slugify(text: str) -> str:
 
 
 def _account_to_dict(a: Account) -> dict:
+    """Note: the encrypted auth token is deliberately NOT included here — this
+    dict flows into templates. Use get_whatsapp_credentials() to read it."""
     return {
         "id": str(a.id),
         "slug": a.slug,
@@ -69,6 +71,9 @@ def _account_to_dict(a: Account) -> dict:
         "city": a.city,
         "custom_instructions": a.custom_instructions,
         "twilio_whatsapp_from": a.twilio_whatsapp_from,
+        "twilio_account_sid": a.twilio_account_sid,
+        "whatsapp_status": a.whatsapp_status,
+        "has_own_twilio": bool(a.twilio_account_sid and a.twilio_auth_token_enc),
     }
 
 
@@ -119,9 +124,59 @@ def get_account_by_twilio_number(to_number: str) -> dict | None:
         return None
 
 
+def get_whatsapp_credentials(account_id) -> dict | None:
+    """The agency's own Twilio credentials, decrypted, or None if they haven't
+    connected their own account (caller then falls back to platform creds)."""
+    from app import crypto
+
+    with _session() as session:
+        account = session.get(Account, account_id)
+        if account is None or not account.twilio_account_sid or not account.twilio_auth_token_enc:
+            return None
+        token = crypto.decrypt(account.twilio_auth_token_enc)
+        if token is None:
+            return None
+        return {
+            "account_sid": account.twilio_account_sid,
+            "auth_token": token,
+            "whatsapp_from": account.twilio_whatsapp_from,
+        }
+
+
+def set_whatsapp_credentials(account_id, account_sid: str, auth_token: str,
+                             whatsapp_from: str, status: str = "connected") -> dict:
+    """Store an agency's own Twilio credentials, encrypting the auth token."""
+    from app import crypto
+
+    with _session() as session:
+        account = session.get(Account, account_id)
+        if account is None:
+            raise ValueError(f"No such account: {account_id}")
+        account.twilio_account_sid = account_sid.strip()
+        account.twilio_auth_token_enc = crypto.encrypt(auth_token.strip())
+        account.twilio_whatsapp_from = whatsapp_from.strip()
+        account.whatsapp_status = status
+        session.commit()
+        session.refresh(account)
+        log.info("Stored WhatsApp credentials for account %s (status=%s)", account_id, status)
+        return _account_to_dict(account)
+
+
+def clear_whatsapp_credentials(account_id) -> None:
+    with _session() as session:
+        account = session.get(Account, account_id)
+        if account is None:
+            return
+        account.twilio_account_sid = None
+        account.twilio_auth_token_enc = None
+        account.whatsapp_status = "not_connected"
+        session.commit()
+
+
 def update_account(account_id, fields: dict) -> dict:
     """Partial update of an account's branding/settings."""
-    allowed = {"agency_name", "agent_name", "city", "custom_instructions", "twilio_whatsapp_from"}
+    allowed = {"agency_name", "agent_name", "city", "custom_instructions",
+               "twilio_whatsapp_from", "whatsapp_status"}
     with _session() as session:
         account = session.get(Account, account_id)
         if account is None:

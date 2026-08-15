@@ -45,7 +45,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 
-from app import agent, auth, config, db, pages, storage
+from app import agent, auth, config, db, importer, pages, storage, twilio_client
 from app.auth import NotAuthenticated
 from app.messages import OPENER_TEMPLATE
 from app.utils import normalize_phone, resolve_media_url, web_session_phone
@@ -422,6 +422,159 @@ async def dashboard_settings_submit(
          "custom_instructions": custom_instructions},
     )
     return RedirectResponse(url="/dashboard/settings?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Import leads from a spreadsheet ----------------------------------------
+
+
+@app.get("/dashboard/import", response_class=HTMLResponse)
+def dashboard_import(request: Request, account: dict = Depends(auth.get_current_account)):
+    return _render(request, "import.html", account, active="import",
+                   result=None, error="", parsed=None)
+
+
+@app.post("/dashboard/import", response_class=HTMLResponse)
+async def dashboard_import_preview(
+    request: Request,
+    account: dict = Depends(auth.get_current_account),
+    file: UploadFile = File(...),
+):
+    """Parse the upload and show a preview — nothing is saved at this step."""
+    try:
+        parsed = importer.parse_leads(file.filename or "", await file.read())
+    except Exception as e:  # noqa: BLE001 - show the reason on the page
+        log.warning("Import parse failed for %s: %s", account.get("slug"), e)
+        return _render(request, "import.html", account, active="import",
+                       result=None, error=str(e), parsed=None)
+
+    return _render(request, "import.html", account, active="import",
+                   result=None, error="", parsed=parsed, filename=file.filename)
+
+
+class ImportConfirmIn(BaseModel):
+    leads: list[dict]
+
+
+@app.post("/dashboard/import/confirm")
+def dashboard_import_confirm(
+    payload: ImportConfirmIn, account: dict = Depends(auth.get_current_account)
+) -> dict:
+    """Write the previewed leads. Existing phones are updated, not duplicated."""
+    created = updated = 0
+    for entry in payload.leads:
+        phone = normalize_phone(entry.get("phone", ""))
+        if not phone:
+            continue
+        existing = db.get_lead(account["id"], phone)
+        db.upsert_lead(account["id"], {
+            "phone": phone,
+            "name": entry.get("name", ""),
+            "source": "excel-import",
+            # Don't reset someone already mid-conversation back to 'new'.
+            **({} if existing else {"status": "new"}),
+        })
+        if existing:
+            updated += 1
+        else:
+            created += 1
+
+    log.info("Imported leads for %s: %d new, %d updated", account.get("slug"), created, updated)
+    return {"created": created, "updated": updated}
+
+
+# --- Sending WhatsApp openers ------------------------------------------------
+
+
+class SendOpenersIn(BaseModel):
+    phones: list[str] = []       # empty = every lead with status 'new'
+
+
+@app.post("/dashboard/send-openers")
+def dashboard_send_openers(
+    payload: SendOpenersIn, account: dict = Depends(auth.get_current_account)
+) -> dict:
+    """Send the opening WhatsApp message and report per-lead outcomes.
+
+    Deliberately returns a row per lead rather than a single count: on the
+    Twilio sandbox most failures are "this number hasn't joined yet", and the
+    agency needs to see exactly which numbers those were.
+    """
+    leads = db.get_all_leads(account["id"])
+    if payload.phones:
+        wanted = {normalize_phone(p) for p in payload.phones}
+        targets = [l for l in leads if l["phone"] in wanted]
+    else:
+        targets = [l for l in leads if l.get("status") == "new"]
+
+    results = []
+    for lead in targets:
+        name = lead.get("name") or "there"
+        body = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
+        try:
+            twilio_client.send_whatsapp(account, lead["phone"], body)
+            db.update_lead_fields(account["id"], lead["phone"], {"status": "contacted"})
+            results.append({"phone": lead["phone"], "name": name, "ok": True, "error": ""})
+        except Exception as e:  # noqa: BLE001 - one bad number must not stop the run
+            log.warning("Opener failed for %s: %s", lead["phone"], e)
+            results.append({"phone": lead["phone"], "name": name, "ok": False,
+                            "error": twilio_client.friendly_error(e)})
+
+    sent = sum(1 for r in results if r["ok"])
+    return {"sent": sent, "failed": len(results) - sent, "results": results}
+
+
+# --- Connect WhatsApp (per agency) ------------------------------------------
+
+
+@app.get("/dashboard/whatsapp", response_class=HTMLResponse)
+def dashboard_whatsapp(request: Request, saved: int = 0,
+                       account: dict = Depends(auth.get_current_account)):
+    return _render(request, "whatsapp.html", account, active="whatsapp",
+                   saved=bool(saved), error="", test_result=None)
+
+
+@app.post("/dashboard/whatsapp")
+async def dashboard_whatsapp_save(
+    account: dict = Depends(auth.get_current_account),
+    twilio_account_sid: str = Form(...),
+    twilio_auth_token: str = Form(...),
+    whatsapp_number: str = Form(...),
+) -> Response:
+    number = whatsapp_number.strip()
+    if not number.startswith("whatsapp:"):
+        number = f"whatsapp:{normalize_phone(number)}"
+    db.set_whatsapp_credentials(
+        account["id"], twilio_account_sid, twilio_auth_token, number, status="connected"
+    )
+    return RedirectResponse(url="/dashboard/whatsapp?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/dashboard/whatsapp/disconnect")
+def dashboard_whatsapp_disconnect(account: dict = Depends(auth.get_current_account)) -> Response:
+    db.clear_whatsapp_credentials(account["id"])
+    return RedirectResponse(url="/dashboard/whatsapp", status_code=status.HTTP_303_SEE_OTHER)
+
+
+class TestMessageIn(BaseModel):
+    to: str
+
+
+@app.post("/dashboard/whatsapp/test")
+def dashboard_whatsapp_test(
+    payload: TestMessageIn, account: dict = Depends(auth.get_current_account)
+) -> dict:
+    """Send a one-off test message so the agency can confirm the connection
+    works before they run it against a real lead list."""
+    body = (
+        f"✅ WhatsApp is connected for {account['agency_name']}. "
+        f"This is a test from your AI agent, {account.get('agent_name') or 'your assistant'}."
+    )
+    try:
+        sid = twilio_client.send_whatsapp(account, payload.to, body)
+        return {"ok": True, "sid": sid, "error": ""}
+    except Exception as e:  # noqa: BLE001 - report the reason in the UI
+        log.warning("Test message failed for %s: %s", account.get("slug"), e)
+        return {"ok": False, "sid": "", "error": twilio_client.friendly_error(e)}
 
 
 # --- Web chat demo: one shareable link per account, no WhatsApp needed ------

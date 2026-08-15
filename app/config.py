@@ -53,6 +53,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me")
 STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "property-media")
 
+# Fernet key encrypting third-party credentials (agency Twilio tokens) at rest.
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+
 
 def require(*names: str) -> None:
     """Raise a clear error if any required env var is missing."""

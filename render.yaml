@@ -35,5 +35,7 @@ services:
         sync: false
       - key: SESSION_SECRET
         sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
       - key: STORAGE_BUCKET
         value: property-media

@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Import Leads{% endblock %}
+{% block heading %}Import Leads{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>📥 Import leads</h1>
+    <p class="sub">Upload your Google Ads, Meta Ads, or portal export — your AI agent takes it from there.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert alert-error">⚠️ {{ error }}</div>{% endif %}
+
+{% if not parsed %}
+<div class="grid grid-2-1">
+  <div class="card">
+    <div class="card-head"><div><h2>Upload a file</h2><div class="sub">Excel (.xlsx) or CSV</div></div></div>
+    <div class="card-body">
+      <form action="/dashboard/import" method="post" enctype="multipart/form-data">
+        <div class="field">
+          <input class="file-input" type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
+          <div class="hint">We'll show you a preview before anything is saved.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Upload &amp; preview</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>File format</h2></div></div>
+    <div class="card-body">
+      <p class="u-muted u-sm u-mb-16">Two columns is all we need. Column names are detected automatically —
+        <code>Name</code>, <code>Mobile</code>, <code>Phone Number</code>, <code>WhatsApp</code> all work.</p>
+      <table class="data" style="border:1px solid var(--border); border-radius:8px">
+        <thead><tr><th>Name</th><th>Phone</th></tr></thead>
+        <tbody>
+          <tr><td>Maviya</td><td>7891323775</td></tr>
+          <tr><td>Ashish</td><td>8209727324</td></tr>
+          <tr><td>Dushyant</td><td>8239819100</td></tr>
+        </tbody>
+      </table>
+      <p class="u-muted u-sm" style="margin-top:12px">Indian numbers get <code>+91</code> automatically.
+        Duplicates and rows without a valid phone are skipped.</p>
+    </div>
+  </div>
+</div>
+
+{% else %}
+
+<div class="alert alert-info">
+  <span>ℹ️</span>
+  <div>Read <b>{{ filename }}</b> — {{ parsed.detected }}. Nothing has been saved yet.</div>
+</div>
+
+<div class="grid grid-2-1">
+  <div class="card">
+    <div class="card-head">
+      <div><h2>{{ parsed.leads|length }} lead{{ '' if parsed.leads|length == 1 else 's' }} ready to import</h2></div>
+      {% if parsed.leads %}
+      <button id="importBtn" class="btn btn-primary btn-sm" style="margin-left:auto" onclick="doImport()">
+        Import {{ parsed.leads|length }} lead{{ '' if parsed.leads|length == 1 else 's' }}
+      </button>
+      {% endif %}
+    </div>
+    <div class="card-body tight">
+      {% if parsed.leads %}
+      <div class="table-wrap" style="max-height:420px; overflow-y:auto">
+        <table class="data">
+          <thead><tr><th>#</th><th>Name</th><th>Phone (normalised)</th></tr></thead>
+          <tbody>
+            {% for lead in parsed.leads %}
+            <tr>
+              <td class="cell-sub">{{ loop.index }}</td>
+              <td class="cell-primary">{{ lead.name or "—" }}</td>
+              <td class="cell-muted num">{{ lead.phone }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon">🤔</div>
+        <h3>No usable rows found</h3>
+        <p>Check that your file has a column with phone numbers.</p>
+        <a href="/dashboard/import" class="btn btn-secondary btn-sm">Try another file</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="stack">
+    {% if parsed.skipped %}
+    <div class="card">
+      <div class="card-head"><div><h2>Skipped ({{ parsed.skipped|length }})</h2></div></div>
+      <div class="card-body tight">
+        <div style="max-height:200px; overflow-y:auto">
+          {% for s in parsed.skipped %}
+          <div style="padding:9px 18px; border-bottom:1px solid var(--border)">
+            <div class="u-sm">{{ s.row or "(empty row)" }}</div>
+            <div class="cell-sub">{{ s.reason }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-head"><div><h2>What happens next</h2></div></div>
+      <div class="card-body">
+        <p class="u-muted u-sm u-mb-16">Imported leads land in your dashboard with status <b>new</b>.
+          Then you can send them the opening WhatsApp message — the AI takes over every reply from there.</p>
+        {% if account.whatsapp_status != 'connected' %}
+        <div class="alert alert-info" style="margin:0">
+          <span>💬</span>
+          <div>WhatsApp isn't connected yet. <a href="/dashboard/whatsapp" style="color:var(--accent);font-weight:600">Connect it</a> to message these leads.</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <a href="/dashboard/import" class="btn btn-ghost btn-sm">← Upload a different file</a>
+  </div>
+</div>
+
+<div id="importResult" style="display:none" class="u-mb-24"></div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if parsed and parsed.leads %}
+<script>
+  const LEADS = {{ parsed.leads | tojson }};
+
+  async function doImport() {
+    const btn = document.getElementById("importBtn");
+    btn.disabled = true; btn.textContent = "Importing…";
+    try {
+      const res = await fetch("/dashboard/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leads: LEADS })
+      });
+      const data = await res.json();
+      const box = document.getElementById("importResult");
+      box.style.display = "block";
+      box.innerHTML =
+        '<div class="alert alert-success"><span>✓</span><div><b>' +
+        data.created + ' new lead(s) imported</b>' +
+        (data.updated ? ', ' + data.updated + ' existing updated' : '') +
+        ' — <a href="/dashboard/leads" style="color:inherit;text-decoration:underline">view them</a>' +
+        ' or <a href="/dashboard/whatsapp" style="color:inherit;text-decoration:underline">send WhatsApp openers</a>.</div></div>';
+      btn.textContent = "Imported ✓";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "Retry import";
+    }
+  }
+</script>
+{% endif %}
+{% endblock %}

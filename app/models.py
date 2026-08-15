@@ -39,9 +39,19 @@ class Account(Base):
     agent_name: Mapped[str] = mapped_column(Text, nullable=False, default="Priya")
     city: Mapped[str] = mapped_column(Text, nullable=False, default="Jaipur")
     custom_instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Nullable: real per-tenant WhatsApp provisioning is a later phase. Until
-    # then, at most one account may hold the single shared sandbox number.
+    # --- WhatsApp channel (per agency) ---
+    # The number leads see. Also how an inbound Twilio webhook is routed back
+    # to the right account.
     twilio_whatsapp_from: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # An agency can bring their own Twilio account. When these are set we send
+    # as them; when they're empty we fall back to the platform's shared
+    # sandbox credentials (fine for demos, not for production volume).
+    twilio_account_sid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Fernet-encrypted — never stored or logged in plaintext. See app/crypto.py.
+    twilio_auth_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # not_connected | sandbox | connected
+    whatsapp_status: Mapped[str] = mapped_column(Text, nullable=False, default="not_connected")
+
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 

@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}WhatsApp{% endblock %}
+{% block heading %}WhatsApp{% endblock %}
+
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>💬 WhatsApp</h1>
+    <p class="sub">Connect your number so the AI agent can message leads directly on WhatsApp.</p>
+  </div>
+  <div class="page-head-actions">
+    {% if account.whatsapp_status == 'connected' %}
+      <span class="badge badge-accent"><span class="dot"></span>Connected</span>
+    {% elif account.whatsapp_status == 'sandbox' %}
+      <span class="badge badge-warm"><span class="dot"></span>Sandbox (testing)</span>
+    {% else %}
+      <span class="badge badge-neutral">Not connected</span>
+    {% endif %}
+  </div>
+</div>
+
+{% if saved %}<div class="alert alert-success">✓ WhatsApp credentials saved. Send yourself a test message below to confirm.</div>{% endif %}
+
+<div class="grid grid-2-1">
+
+  <div class="stack">
+    <!-- Connection form -->
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Connect your Twilio account</h2><div class="sub">Your credentials are encrypted before they're stored</div></div>
+      </div>
+      <div class="card-body">
+        <form action="/dashboard/whatsapp" method="post">
+          <div class="field">
+            <label>Twilio Account SID</label>
+            <input class="input" name="twilio_account_sid" required placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                   value="{{ account.twilio_account_sid or '' }}">
+            <div class="hint">Twilio Console → Account Info</div>
+          </div>
+          <div class="field">
+            <label>Twilio Auth Token</label>
+            <input class="input" type="password" name="twilio_auth_token" required
+                   placeholder="{% if account.has_own_twilio %}•••••••• (saved — retype to change){% else %}Your auth token{% endif %}">
+            <div class="hint">Stored encrypted. We never show it again after saving.</div>
+          </div>
+          <div class="field">
+            <label>Your WhatsApp number</label>
+            <input class="input" name="whatsapp_number" required placeholder="+14155238886"
+                   value="{{ (account.twilio_whatsapp_from or '').replace('whatsapp:','') }}">
+            <div class="hint">The approved WhatsApp Business number, or the Twilio sandbox number for testing.</div>
+          </div>
+          <button type="submit" class="btn btn-primary">Save connection</button>
+          {% if account.has_own_twilio %}
+          <button type="submit" form="disconnectForm" class="btn btn-ghost">Disconnect</button>
+          {% endif %}
+        </form>
+        <form id="disconnectForm" action="/dashboard/whatsapp/disconnect" method="post" style="display:none;padding:0;background:none"></form>
+      </div>
+    </div>
+
+    <!-- Test message -->
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Send a test message</h2><div class="sub">Confirm the connection works before messaging real leads</div></div>
+      </div>
+      <div class="card-body">
+        <div class="row" style="gap:8px">
+          <input id="testTo" class="input" placeholder="+919812345678" style="flex:1">
+          <button class="btn btn-secondary" onclick="sendTest()">Send test</button>
+        </div>
+        <div id="testResult" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- Send openers -->
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Message your new leads</h2><div class="sub">Sends the opening message to every lead with status “new”</div></div>
+      </div>
+      <div class="card-body">
+        <button class="btn btn-primary" onclick="sendOpeners()" id="openerBtn">Send openers to new leads</button>
+        <div id="openerResult" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- What you need -->
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><div><h2>What you need</h2></div></div>
+      <div class="card-body">
+        <h3 style="margin-bottom:6px">🧪 For testing (today, free)</h3>
+        <p class="u-muted u-sm u-mb-16">
+          Use Twilio's WhatsApp <b>sandbox</b>. It works instantly — but it can only message people who
+          have first sent the sandbox join code from their own WhatsApp. Fine for demos with your own team.
+        </p>
+
+        <h3 style="margin-bottom:6px">🏢 For production (real leads)</h3>
+        <p class="u-muted u-sm" style="margin-bottom:8px">A verified WhatsApp Business number. You'll need:</p>
+        <ul class="u-muted u-sm" style="margin:0 0 14px; padding-left:18px; line-height:1.9">
+          <li>A phone number <b>not</b> active on regular WhatsApp</li>
+          <li>A Meta Business Manager account</li>
+          <li>Business verification — registration certificate &amp; address proof</li>
+          <li>An approved display name (your agency name)</li>
+          <li>An approved message template for the first message</li>
+        </ul>
+        <div class="alert alert-info" style="margin:0">
+          <span>⏱️</span>
+          <div>Meta's review usually takes <b>1–3 days</b>. Until it's approved, your web lead link keeps
+            working normally — leads still get qualified.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>The 24-hour rule</h2></div></div>
+      <div class="card-body">
+        <p class="u-muted u-sm">WhatsApp only allows free-form messages within <b>24 hours</b> of a lead's last
+          reply. Outside that window the first message must be a pre-approved template. Your AI agent's
+          replies during a live conversation are always inside this window.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function sendTest() {
+    const to = document.getElementById("testTo").value.trim();
+    const box = document.getElementById("testResult");
+    if (!to) { box.innerHTML = '<div class="alert alert-error" style="margin:0">Enter a number first.</div>'; return; }
+    box.innerHTML = '<div class="u-muted u-sm">Sending…</div>';
+    const res = await fetch("/dashboard/whatsapp/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: to })
+    });
+    const d = await res.json();
+    box.innerHTML = d.ok
+      ? '<div class="alert alert-success" style="margin:0"><span>✓</span><div>Sent! Check WhatsApp on that number.</div></div>'
+      : '<div class="alert alert-error" style="margin:0"><span>⚠️</span><div>' + d.error + '</div></div>';
+  }
+
+  async function sendOpeners() {
+    const btn = document.getElementById("openerBtn");
+    const box = document.getElementById("openerResult");
+    btn.disabled = true; btn.textContent = "Sending…";
+    box.innerHTML = "";
+    try {
+      const res = await fetch("/dashboard/send-openers", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phones: [] })
+      });
+      const d = await res.json();
+      if (!d.results.length) {
+        box.innerHTML = '<div class="alert alert-info" style="margin:0"><span>ℹ️</span><div>No leads with status “new”. <a href="/dashboard/import" style="color:inherit;text-decoration:underline">Import some leads</a> first.</div></div>';
+      } else {
+        let html = '<div class="alert ' + (d.failed ? 'alert-info' : 'alert-success') + '"><span>' + (d.failed ? 'ℹ️' : '✓') +
+          '</span><div><b>' + d.sent + ' sent</b>' + (d.failed ? ', ' + d.failed + ' failed' : '') + '</div></div>';
+        html += '<div class="table-wrap"><table class="data"><thead><tr><th>Lead</th><th>Status</th></tr></thead><tbody>';
+        d.results.forEach(function (r) {
+          html += '<tr><td><div class="cell-primary">' + r.name + '</div><div class="cell-sub">' + r.phone + '</div></td>' +
+            '<td>' + (r.ok
+              ? '<span class="badge badge-accent">✓ Sent</span>'
+              : '<span class="badge badge-hot">Failed</span><div class="cell-sub">' + r.error + '</div>') +
+            '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        box.innerHTML = html;
+      }
+    } catch (e) {
+      box.innerHTML = '<div class="alert alert-error" style="margin:0">Something went wrong — try again.</div>';
+    }
+    btn.disabled = false; btn.textContent = "Send openers to new leads";
+  }
+</script>
+{% endblock %}
