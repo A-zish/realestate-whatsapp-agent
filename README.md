@@ -1,112 +1,139 @@
-# Real Estate WhatsApp Lead Agent
+# LeadPilot — AI lead qualification for real estate
 
-Backend service that imports real-estate leads, opens a WhatsApp conversation
-via Twilio, qualifies each lead with an AI agent (Groq), scores them
-Hot/Warm/Cold, and writes everything back to a Google Sheet (the dashboard).
-Also includes a shareable **web chat demo** (no WhatsApp needed) and an
-**admin panel** for managing property inventory with photo/video uploads.
+Multi-tenant SaaS. Each real estate agency signs up, gets their own AI sales
+agent, their own shareable lead-capture link, and a dashboard where every
+lead arrives already qualified and scored HOT / WARM / COLD.
+
+The agent qualifies leads over chat (web today, WhatsApp where connected):
+captures location, property type, budget and timeline, shows matching
+properties from that agency's own inventory, handles objections, and pushes
+toward booking a site visit.
+
+---
+
+## Stack
+
+| Layer | Choice |
+|---|---|
+| Web | FastAPI + Jinja2 templates (server-rendered) |
+| UI | Hand-rolled CSS design system (`app/static/css/app.css`) — no build step |
+| DB | Postgres (Supabase), SQLAlchemy + Alembic migrations |
+| Auth | Self-hosted, PBKDF2-HMAC-SHA256 (stdlib) + signed session cookie |
+| File storage | Supabase Storage (property photos/videos) |
+| LLM | Groq (`llama-3.3-70b-versatile`) — isolated in `app/agent.py`, swappable |
+| WhatsApp | Twilio (sandbox today; production needs Meta verification) |
+| Hosting | Render |
+
+---
 
 ## Local setup
 
-```powershell
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate           # Windows
+# source .venv/bin/activate      # macOS / Linux
+
 pip install -r requirements.txt
-copy .env.example .env          # then fill in your values
-```
-
-Required env vars (see `.env.example`): `GROQ_API_KEY`, `TWILIO_ACCOUNT_SID`,
-`TWILIO_AUTH_TOKEN`, `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`.
-
-Run locally:
-```powershell
+cp .env.example .env             # then fill it in — see below
+alembic upgrade head             # create the schema
 uvicorn app.main:app --reload --port 8000
 ```
-- `GET /health` — liveness check
-- `GET /demo` — web chat demo (real agent + sheet, no WhatsApp needed)
-- `GET /admin/leads`, `GET /admin/properties` — admin panel (HTTP Basic auth via `ADMIN_USER`/`ADMIN_PASSWORD`)
-- `POST /webhook` — Twilio WhatsApp webhook
 
-For WhatsApp testing, expose the local server with a tunnel (e.g. `cloudflared tunnel --url http://localhost:8000`)
-and set that URL + `/webhook` as the Twilio Sandbox's "When a message comes in".
+Open http://localhost:8000/signup and create an agency account.
 
-## Deploying to a permanent URL (Render, free tier)
+### Env vars
 
-The web chat demo and admin panel need to be reachable at a stable URL — not
-a laptop-dependent dev tunnel — for anything beyond your own testing.
-[Render](https://render.com) has a genuinely free web-service tier (no card
-required) and this repo includes a `render.yaml` blueprint for it.
+`.env` is git-ignored and never committed. Ask the project owner for values,
+or point at your own Supabase project for local dev.
 
-**1. Push this repo to GitHub** (skip if you already have a GitHub account and repo set up):
-```powershell
-git remote add origin https://github.com/<your-username>/<repo-name>.git
-git branch -M main
-git push -u origin main
-```
+| Var | What it is |
+|---|---|
+| `DATABASE_URL` | Postgres connection string. Use Supabase's **Session pooler** URI (the direct one is IPv6-only and fails on some hosts). Percent-encode special characters in the password. |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Used only for Storage uploads |
+| `SESSION_SECRET` | Signs session cookies. `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `GROQ_API_KEY` | The LLM. Free tier at console.groq.com |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | WhatsApp channel |
+| `PUBLIC_BASE_URL` | This server's public URL, used to build shareable/lead links |
+| `STORAGE_BUCKET` | Defaults to `property-media` |
 
-**2. Create a Render account** at [render.com](https://render.com) (GitHub sign-in is fastest — free, no credit card for the free tier).
+---
 
-**3. New → Blueprint**, connect the GitHub repo you just pushed. Render reads
-`render.yaml` and creates the web service automatically.
-
-**4. Fill in the environment variables** Render asks for (values with
-`sync: false` in `render.yaml` aren't pre-filled — copy them from your local
-`.env`):
-- `GROQ_API_KEY`
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
-- `GOOGLE_SHEET_ID`
-- `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the **entire JSON key file contents**
-  as the value (not a file path — Render can't see local files). The app
-  detects JSON-shaped values automatically.
-- `ADMIN_USER`, `ADMIN_PASSWORD`
-
-Leave `PUBLIC_BASE_URL` blank for the first deploy.
-
-**5. Deploy.** Render builds and gives you a permanent URL like
-`https://realestate-whatsapp-agent.onrender.com`.
-
-**6. Set `PUBLIC_BASE_URL`** to that exact URL in Render's environment
-variables (used to build public links for uploaded property photos) — this
-triggers an automatic redeploy.
-
-**7. Point Twilio at it**: Twilio Console → WhatsApp Sandbox settings →
-"When a message comes in" → `https://<your-render-url>/webhook`.
-
-### Known limitations of the free tier
-- **Cold start**: the free plan spins the service down after ~15 minutes of
-  no traffic; the next request takes ~30-50s to wake it up. Open the `/demo`
-  link yourself a minute before showing it to someone, to warm it up.
-- **Ephemeral disk**: property photos uploaded via `/admin/properties` are
-  stored on local disk and are **lost when the service restarts** (idle
-  spin-down or a redeploy). For anything beyond a same-session demo, prefer
-  pasting external image URLs directly into the `properties` sheet tab, or
-  re-upload shortly before a meeting. A persistent-storage upgrade (e.g. S3)
-  is a natural next step before real production use.
-
-## Project layout
+## How it's organised
 
 ```
 app/
-  config.py       # env-var config (secrets only via environment)
-  sheets.py       # Google Sheet access — leads + properties tabs
-  agent.py        # the AI conversation agent (Groq)
-  messages.py     # shared canned message templates
-  utils.py        # phone normalization, media URL resolution
-  pages.py        # HTML for the admin panel + web chat demo
-  main.py         # FastAPI app: /webhook, /demo/*, /admin/*
-  twilio_client.py
-scripts/
-  send_test.py, send_openers.py, import_leads.py, ...
-data/
-  properties.json # demo inventory seed (placeholder data)
-  media/          # uploaded property photos (git-ignored, ephemeral on free hosting)
+  main.py        FastAPI routes: auth, dashboard, playground, /demo/<slug>, /webhook
+  models.py      SQLAlchemy models: accounts, users, leads, properties
+  db.py          ALL data access — every function is account-scoped
+  auth.py        password hashing + session cookies
+  agent.py       the LLM call, system prompt, JSON parsing
+  storage.py     Supabase Storage uploads
+  utils.py       phone normalization, media URL resolution
+  templates/     Jinja2 pages (base.html is the shell)
+  static/        design system CSS + a little JS
+alembic/         schema migrations
+scripts/         seed + test scripts (run as `python -m scripts.<name>`)
 ```
 
-## Notes / constraints
+### The one rule: tenant isolation
 
-- **Twilio WhatsApp sandbox** is the transport for WhatsApp testing. You can
-  only freely message a number after it has joined the sandbox. A real
-  WhatsApp Business number (Meta verification + approved templates) is a
-  separate, later step for messaging arbitrary leads.
-- **Secrets via environment variables only.** `.env` and `service_account.json`
-  are git-ignored — never commit them.
+Every lead and property belongs to an `account_id`. **Every function in
+`app/db.py` takes `account_id` as its first argument** and only ever touches
+that account's rows. There is deliberately no "get all leads across
+accounts" function. If you add a query, keep this invariant — it's the whole
+security model of the product.
+
+### Playground vs. lead link
+
+Two different things that used to be one confusing URL:
+
+- **`/dashboard/playground`** — the agency testing their own agent. Chat
+  history lives in the browser only; **nothing is written to the database.**
+- **`/demo/<account-slug>`** — the real, public capture link. Every
+  conversation creates and updates a scored lead.
+
+---
+
+## Testing
+
+Scripts under `scripts/` run against a live database, so point `.env` at a
+scratch Supabase project before running them.
+
+```bash
+python -m scripts._test_ui                  # every page renders
+python -m scripts._test_multitenant_e2e     # signup, login, tenant isolation, webhook
+python -m scripts._test_storage_upload      # property media upload
+python -m scripts.test_agent                # offline agent conversation
+```
+
+They clean up the rows they create.
+
+---
+
+## Deploying
+
+Render builds from `render.yaml` and runs
+`alembic upgrade head && uvicorn app.main:app`, so migrations apply on every
+deploy. Push to `main` → auto-deploy.
+
+Secrets marked `sync: false` in `render.yaml` are set by hand in Render's
+**Environment** tab; they are never in the repo.
+
+**Free-tier gotcha:** the service sleeps after ~15 min idle, so the first
+request takes ~50s. Open the link a minute before a client demo.
+
+---
+
+## Known gaps / roadmap
+
+- **Team members & roles** — one login per agency today; invites + Owner /
+  Manager / Agent roles not built yet
+- **Lead import UI** — `scripts/import_leads.py` exists but isn't exposed in
+  the dashboard, and still needs account scoping
+- **Conversation view** — leads table doesn't yet open the full transcript
+- **Human takeover** — no way to pause the AI and reply manually
+- **WhatsApp per agency** — one shared Twilio sandbox number; production
+  needs Meta business verification + approved templates per agency
+- **Billing** — not started
+- `app/sheets.py` is dead code from the pre-Postgres version, kept only for
+  reference; safe to delete
