@@ -53,7 +53,33 @@
           <code style="flex:1">{{ lead_link }}</code>
           <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
         </div>
-        <p class="u-muted u-sm">Every chat on this link becomes a scored lead. To test without saving anything, use <a href="/dashboard/playground" style="color:var(--accent);font-weight:600">Test agent</a>.</p>
+        <p class="u-muted u-sm">Every chat on this link becomes a scored lead. Put this URL on the Google Ads landing page — not a raw form, and never a GA4 event dump.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Ingest webhook</h2><div class="sub">Zapier, Make, or your landing form</div></div></div>
+      <div class="card-body">
+        <p class="u-muted u-sm u-mb-16">POST JSON <code>{"phone","name","source","campaign","gclid"}</code> with <code>Authorization: Bearer …</code>. Leads are stored as pending.</p>
+        {% if ingest_token %}
+        <div class="alert alert-info u-mb-16">Copy this token now. It is not stored in plaintext.</div>
+        <div class="field">
+          <label>URL</label>
+          <div class="linkbox"><code style="flex:1">{{ ingest_url }}</code></div>
+        </div>
+        <div class="field">
+          <label>Token</label>
+          <div class="linkbox">
+            <code style="flex:1">{{ ingest_token }}</code>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="copyText('{{ ingest_token }}', this)">Copy</button>
+          </div>
+        </div>
+        {% elif account.has_ingest_token %}
+        <p class="u-muted u-sm u-mb-16">A token is already active. Rotate it if you need a new secret.</p>
+        {% endif %}
+        <form action="/dashboard/settings/ingest-token" method="post">
+          <button type="submit" class="btn btn-secondary btn-sm">{{ "Rotate token" if account.has_ingest_token else "Generate token" }}</button>
+        </form>
       </div>
     </div>
 

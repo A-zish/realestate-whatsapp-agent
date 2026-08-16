@@ -20,7 +20,8 @@
   </div>
 </div>
 
-{% if saved %}<div class="alert alert-success">✓ WhatsApp credentials saved. Send yourself a test message below to confirm.</div>{% endif %}
+{% if saved %}<div class="alert alert-success">WhatsApp credentials saved. Send yourself a test message below to confirm.</div>{% endif %}
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
 
 <div class="grid grid-2-1">
 
@@ -154,6 +155,10 @@
         body: JSON.stringify({ phones: [] })
       });
       const d = await res.json();
+      if (!res.ok) {
+        box.innerHTML = '<div class="alert alert-error" style="margin:0"><span>⚠️</span><div>' + (d.detail || "Could not send") + '</div></div>';
+        return;
+      }
       if (!d.results.length) {
         box.innerHTML = '<div class="alert alert-info" style="margin:0"><span>ℹ️</span><div>No leads with status “new”. <a href="/dashboard/import" style="color:inherit;text-decoration:underline">Import some leads</a> first.</div></div>';
       } else {

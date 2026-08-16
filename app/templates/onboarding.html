@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Set up{% endblock %}
+{% block heading %}Set up your agency{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Get ready for a 30-day pilot</h1>
+    <p class="sub">Four steps. Your call centre should only dial HOT and WARM after this.</p>
+  </div>
+</div>
+
+<div class="row u-mb-16" style="gap:8px; flex-wrap:wrap">
+  <span class="badge {% if step >= 1 %}badge-accent{% else %}badge-neutral{% endif %}">1. Agency</span>
+  <span class="badge {% if step >= 2 %}badge-accent{% else %}badge-neutral{% endif %}">2. Inventory</span>
+  <span class="badge {% if step >= 3 %}badge-accent{% else %}badge-neutral{% endif %}">3. Lead link</span>
+  <span class="badge {% if step >= 4 %}badge-accent{% else %}badge-neutral{% endif %}">4. Ingest</span>
+</div>
+
+{% if step == 1 %}
+<div class="card" style="max-width:560px">
+  <div class="card-head"><div><h2>Agency details</h2><div class="sub">Shown to buyers in chat</div></div></div>
+  <div class="card-body">
+    <form action="/onboarding/profile" method="post">
+      <div class="field">
+        <label>Agency name</label>
+        <input class="input" name="agency_name" value="{{ account.agency_name }}" required>
+      </div>
+      <div class="field">
+        <label>Agent name</label>
+        <input class="input" name="agent_name" value="{{ account.agent_name }}" required>
+      </div>
+      <div class="field">
+        <label>City</label>
+        <input class="input" name="city" value="{{ account.city }}" placeholder="Jaipur">
+      </div>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if step == 2 %}
+<div class="grid grid-2-1">
+  <div class="card">
+    <div class="card-head"><div><h2>Add one property</h2><div class="sub">The agent will not invent prices or projects</div></div></div>
+    <div class="card-body">
+      {% if property_count %}
+      <div class="alert alert-success u-mb-16">{{ property_count }} listing{{ '' if property_count == 1 else 's' }} on file.</div>
+      <a href="/onboarding?step=3" class="btn btn-primary">Continue</a>
+      {% else %}
+      <form action="/dashboard/properties" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="nxt" value="/onboarding?step=3">
+        <div class="field">
+          <label>Title</label>
+          <input class="input" name="title" required placeholder="3BHK Apartment, Jagatpura">
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select class="select" name="type">
+            {% for t in property_types %}
+            <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Location</label>
+          <input class="input" name="location" placeholder="Jagatpura, Jaipur">
+        </div>
+        <div class="field">
+          <label>Price</label>
+          <input class="input" name="price" placeholder="₹75 Lakh">
+        </div>
+        <button type="submit" class="btn btn-primary">Save and continue</button>
+      </form>
+      <p class="u-muted u-sm" style="margin-top:12px">
+        <a href="/onboarding?step=3">Skip for now</a> — the agent will only qualify, not show inventory.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if step == 3 %}
+<div class="card" style="max-width:640px">
+  <div class="card-head"><div><h2>Google Ads landing CTA</h2></div></div>
+  <div class="card-body">
+    <p class="u-mb-16">Point the ad to this URL — not a raw contact form and not a GA4 event dump. Every chat is scored before a human calls.</p>
+    <div class="linkbox u-mb-16">
+      <code style="flex:1">{{ lead_link }}</code>
+      <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
+    </div>
+    <a href="/onboarding?step=4" class="btn btn-primary">Continue</a>
+  </div>
+</div>
+{% endif %}
+
+{% if step == 4 %}
+<div class="card" style="max-width:640px">
+  <div class="card-head"><div><h2>Optional: import existing Ads leads</h2></div></div>
+  <div class="card-body">
+    <p class="u-muted u-sm u-mb-16">CSV/Excel on the Import page, or POST to the ingest webhook. Imported rows stay <b>pending</b> until the agent scores them — they will not appear on the caller queue.</p>
+    {% if ingest_token %}
+    <div class="alert alert-info u-mb-16">
+      Copy this token now. It is not shown again.
+    </div>
+    <div class="field">
+      <label>POST URL</label>
+      <div class="linkbox"><code style="flex:1">{{ ingest_url }}</code></div>
+    </div>
+    <div class="field">
+      <label>Bearer token</label>
+      <div class="linkbox">
+        <code style="flex:1">{{ ingest_token }}</code>
+        <button class="btn btn-secondary btn-sm" onclick="copyText('{{ ingest_token }}', this)">Copy</button>
+      </div>
+    </div>
+    {% else %}
+    <form action="/onboarding/ingest-token" method="post" class="u-mb-16">
+      <button type="submit" class="btn btn-secondary">Generate ingest token</button>
+    </form>
+    {% endif %}
+    <form action="/onboarding/complete" method="post">
+      <button type="submit" class="btn btn-primary">Finish setup</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

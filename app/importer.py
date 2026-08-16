@@ -22,23 +22,33 @@ NAME_HEADERS = {"name", "full name", "lead name", "customer name", "contact name
 PHONE_HEADERS = {"phone", "phone number", "mobile", "mobile number", "number", "contact",
                  "contact number", "whatsapp", "whatsapp number", "phone_number", "mobile_no"}
 EMAIL_HEADERS = {"email", "email address", "e-mail"}
+CAMPAIGN_HEADERS = {"campaign", "campaign name", "campaign_name", "ad campaign", "utm campaign", "utm_campaign"}
+GCLID_HEADERS = {"gclid", "google click id", "google_click_id", "click id"}
+SOURCE_HEADERS = {"source", "lead source", "origin"}
 
 
 def _norm_header(value) -> str:
     return str(value or "").strip().lower().replace("_", " ")
 
 
-def _detect_columns(header_row: list) -> tuple[int | None, int | None]:
-    """Find (name_idx, phone_idx) from a header row, or (None, None) if this
-    row doesn't look like headers at all."""
-    name_idx = phone_idx = None
+def _detect_columns(header_row: list) -> dict[str, int | None]:
+    """Map logical fields to column indexes from a header row."""
+    found: dict[str, int | None] = {
+        "name": None, "phone": None, "campaign": None, "gclid": None, "source": None,
+    }
+    sets = {
+        "name": NAME_HEADERS,
+        "phone": PHONE_HEADERS,
+        "campaign": CAMPAIGN_HEADERS,
+        "gclid": GCLID_HEADERS,
+        "source": SOURCE_HEADERS,
+    }
     for i, cell in enumerate(header_row):
         label = _norm_header(cell)
-        if label in NAME_HEADERS and name_idx is None:
-            name_idx = i
-        elif label in PHONE_HEADERS and phone_idx is None:
-            phone_idx = i
-    return name_idx, phone_idx
+        for key, headers in sets.items():
+            if found[key] is None and label in headers:
+                found[key] = i
+    return found
 
 
 def _rows_from_excel(content: bytes) -> list[list]:
@@ -69,17 +79,30 @@ def parse_leads(filename: str, content: bytes) -> dict:
     if not rows:
         return {"leads": [], "skipped": [], "detected": "empty file"}
 
-    name_idx, phone_idx = _detect_columns(rows[0])
+    cols = _detect_columns(rows[0])
+    name_idx, phone_idx = cols["name"], cols["phone"]
     if name_idx is not None or phone_idx is not None:
-        detected = f"header row: name=column {(name_idx or 0) + 1}, phone=column {(phone_idx or 1) + 1}"
+        detected = (
+            f"header row: name=column {(name_idx or 0) + 1}, "
+            f"phone=column {(phone_idx or 1) + 1}"
+        )
+        extras = []
+        if cols["campaign"] is not None:
+            extras.append("campaign")
+        if cols["gclid"] is not None:
+            extras.append("gclid")
+        if cols["source"] is not None:
+            extras.append("source")
+        if extras:
+            detected += "; also " + ", ".join(extras)
         data_rows = rows[1:]
         name_idx = 0 if name_idx is None else name_idx
         phone_idx = 1 if phone_idx is None else phone_idx
     else:
-        # No recognisable headers — assume the common "name, phone" layout.
         detected = "no header row found — using column 1 as name, column 2 as phone"
         name_idx, phone_idx = 0, 1
         data_rows = rows
+        cols = {"campaign": None, "gclid": None, "source": None}
 
     leads, skipped, seen = [], [], set()
     for row in data_rows:
@@ -94,8 +117,19 @@ def parse_leads(filename: str, content: bytes) -> dict:
             skipped.append({"row": _preview(row), "reason": f"duplicate of {phone}"})
             continue
 
+        def _cell(idx: int | None) -> str:
+            if idx is None or len(row) <= idx or row[idx] is None:
+                return ""
+            return str(row[idx]).strip()
+
         seen.add(phone)
-        leads.append({"name": raw_name, "phone": phone})
+        leads.append({
+            "name": raw_name,
+            "phone": phone,
+            "campaign": _cell(cols.get("campaign")),
+            "gclid": _cell(cols.get("gclid")),
+            "source": _cell(cols.get("source")),
+        })
 
     return {"leads": leads, "skipped": skipped, "detected": detected}
 

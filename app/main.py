@@ -25,29 +25,35 @@ Inbound flow for either channel (see run_conversation_turn):
   4. Persist extracted fields, score, status, stage, and history back to
      Postgres, scoped to that account.
 """
+import csv
+import io
 import logging
 import os
+from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import (
     Depends,
     FastAPI,
     File,
     Form,
+    Header,
     HTTPException,
     Request,
     Response,
     UploadFile,
     status,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 
-from app import agent, auth, config, db, importer, pages, storage, twilio_client
+from app import agent, auth, config, db, importer, pages, ratelimit, storage, twilio_client
 from app.auth import NotAuthenticated
 from app.messages import OPENER_TEMPLATE
+from app.twilio_verify import verify_twilio_signature
 from app.utils import normalize_phone, resolve_media_url, web_session_phone
 
 logging.basicConfig(
@@ -57,6 +63,11 @@ logging.basicConfig(
 log = logging.getLogger("realestate")
 
 app = FastAPI(title="Real Estate Lead Agent (Multi-tenant)")
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    config.assert_secure_session_secret()
 
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(_APP_DIR, "static")), name="static")
@@ -91,8 +102,87 @@ def _lead_link(request: Request, account: dict) -> str:
 
 def _render(request: Request, template: str, account: dict, **ctx) -> HTMLResponse:
     """Render a dashboard page with the context every page's shell needs."""
-    base_ctx = {"account": account, "lead_link": _lead_link(request, account)}
+    props = db.get_properties(account["id"], only_available=False)
+    base_ctx = {
+        "account": account,
+        "lead_link": _lead_link(request, account),
+        "onboarding_done": bool(account.get("onboarding_completed_at")),
+        "property_count": len(props),
+    }
     return templates.TemplateResponse(request, template, {**base_ctx, **ctx})
+
+
+def _client_ip(request: Request) -> str:
+    return ratelimit.client_ip(request.headers, request.client.host if request.client else None)
+
+
+def _require_onboarding(account: dict) -> Response | None:
+    if account.get("onboarding_completed_at"):
+        return None
+    return RedirectResponse(url="/onboarding", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _apply_lead_filters(
+    leads: list[dict],
+    *,
+    q: str = "",
+    score: str = "",
+    status_filter: str = "",
+    view: str = "call",
+) -> list[dict]:
+    if q:
+        needle = q.lower()
+        leads = [
+            lead for lead in leads
+            if needle in " ".join(
+                str(lead.get(f, "")) for f in
+                ("name", "phone", "location_pref", "property_type", "budget",
+                 "last_message", "score_reason", "campaign")
+            ).lower()
+        ]
+    if score:
+        leads = [lead for lead in leads if (lead.get("score") or "").upper() == score.upper()]
+    if status_filter:
+        leads = [lead for lead in leads if lead.get("status") == status_filter]
+    view = (view or "call").lower()
+    if view == "call" and not score:
+        leads = [
+            lead for lead in leads
+            if (lead.get("qualification_status") or "") == "scored"
+            and (lead.get("score") or "").upper() in {"HOT", "WARM"}
+        ]
+    elif view == "cold" and not score:
+        leads = [
+            lead for lead in leads
+            if (lead.get("qualification_status") or "") == "scored"
+            and (lead.get("score") or "").upper() == "COLD"
+        ]
+    elif view == "pending":
+        leads = [lead for lead in leads if (lead.get("qualification_status") or "") == "pending"]
+    return leads
+
+
+def _ingest_lead(account_id, entry: dict, *, default_source: str) -> tuple[str, dict]:
+    """Upsert a form/CSV/webhook lead as pending. Returns ('created'|'updated', lead)."""
+    phone = normalize_phone(entry.get("phone", ""))
+    if not phone:
+        raise ValueError("phone is required")
+    existing = db.get_lead(account_id, phone)
+    source = (entry.get("source") or default_source or "").strip() or default_source
+    payload = {
+        "phone": phone,
+        "name": entry.get("name") or (existing or {}).get("name") or "",
+        "source": source,
+        "campaign": entry.get("campaign") or "",
+        "gclid": entry.get("gclid") or "",
+    }
+    if not existing:
+        payload["status"] = "new"
+        payload["qualification_status"] = "pending"
+    elif (existing.get("qualification_status") or "") == "pending":
+        payload["qualification_status"] = "pending"
+    db.upsert_lead(account_id, payload)
+    return ("updated" if existing else "created"), db.get_lead(account_id, phone) or {}
 
 # Fields the agent extracts -> lead columns. Only non-empty values overwrite.
 _EXTRACT_FIELDS = ("intent", "location_pref", "property_type", "budget", "timeline")
@@ -120,7 +210,14 @@ def run_conversation_turn(account: dict, phone: str, body: str, name: str, sourc
     lead = db.get_lead(account_id, phone)
     if lead is None:
         lead = db.upsert_lead(
-            account_id, {"phone": phone, "name": name or "", "source": source, "status": "contacted"}
+            account_id,
+            {
+                "phone": phone,
+                "name": name or "",
+                "source": source,
+                "status": "contacted",
+                "qualification_status": "in_conversation",
+            },
         )
 
     try:
@@ -143,6 +240,12 @@ def run_conversation_turn(account: dict, phone: str, body: str, name: str, sourc
         fields["status"] = action["status"]
     if action.get("score") and str(action["score"]).lower() != "null":
         fields["score"] = action["score"]
+        fields["qualification_status"] = "scored"
+    else:
+        fields["qualification_status"] = "in_conversation"
+    reason = str(action.get("score_reason") or "").strip()
+    if reason:
+        fields["score_reason"] = reason
     if action.get("stage"):
         fields["stage"] = action["stage"]
     fields["history_json"] = action.get("_history", [])  # JSONB column: store the list directly
@@ -160,15 +263,17 @@ def run_conversation_turn(account: dict, phone: str, body: str, name: str, sourc
 
 
 @app.post("/webhook")
-async def webhook(
-    request: Request,
-    From: str = Form(default=""),
-    To: str = Form(default=""),
-    Body: str = Form(default=""),
-    ProfileName: str = Form(default=""),
-) -> Response:
+async def webhook(request: Request) -> Response:
     """Twilio posts inbound WhatsApp messages here (form-encoded)."""
-    await request.form()  # ensures Twilio's payload is fully parsed/logged below
+    form = await request.form()
+    params = {k: str(v) for k, v in form.items()}
+    if not verify_twilio_signature(request, params):
+        raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+    From = params.get("From", "")
+    To = params.get("To", "")
+    Body = params.get("Body", "")
+    ProfileName = params.get("ProfileName", "")
     log.info("Inbound from %s to %s: %r", From, To, Body)
 
     account = db.get_account_by_twilio_number(To)
@@ -199,6 +304,7 @@ def _set_session_cookie(response: Response, user_id: str, account_id: str) -> No
         max_age=auth.SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=config.cookie_secure(),
     )
 
 
@@ -223,6 +329,8 @@ async def signup_submit(
     request: Request,
     agency_name: str = Form(...), email: str = Form(...), password: str = Form(...)
 ) -> Response:
+    if not ratelimit.limiter.allow(f"signup:{_client_ip(request)}", limit=5, window_s=900):
+        return _auth_page(request, "signup", "Too many signup attempts. Try again later.", 429)
     # Validate the login BEFORE creating the account, so a rejected signup
     # (duplicate email, weak password) doesn't leave an orphaned account.
     email_norm = auth.normalize_email(email)
@@ -237,7 +345,7 @@ async def signup_submit(
     except auth.AuthError as e:
         return _auth_page(request, "signup", str(e), 400)
 
-    resp = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    resp = RedirectResponse(url="/onboarding", status_code=status.HTTP_303_SEE_OTHER)
     _set_session_cookie(resp, user_id, account["id"])
     return resp
 
@@ -260,7 +368,11 @@ async def login_submit(
     if account_id is None:
         return _auth_page(request, "login", "No agency account is linked to this login.", 400)
 
-    resp = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    dest = "/dashboard"
+    logged_account = db.get_account_by_id(account_id)
+    if logged_account and not logged_account.get("onboarding_completed_at"):
+        dest = "/onboarding"
+    resp = RedirectResponse(url=dest, status_code=status.HTTP_303_SEE_OTHER)
     _set_session_cookie(resp, user_id, account_id)
     return resp
 
@@ -277,6 +389,9 @@ def logout() -> Response:
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, account: dict = Depends(auth.get_current_account)):
+    gate = _require_onboarding(account)
+    if gate:
+        return gate
     stats = db.get_lead_stats(account["id"])
     return _render(request, "overview.html", account,
                    active="overview", stats=stats, lead_count=stats["total"])
@@ -288,32 +403,122 @@ def dashboard_leads(
     q: str = "",
     score: str = "",
     status_filter: str = "",
+    view: str = "call",
     account: dict = Depends(auth.get_current_account),
 ):
+    gate = _require_onboarding(account)
+    if gate:
+        return gate
     leads = db.get_all_leads(account["id"])
     stats = db.get_lead_stats(account["id"])
     all_statuses = sorted(stats["statuses"].keys())
+    filtered = _apply_lead_filters(
+        leads, q=q, score=score, status_filter=status_filter, view=view
+    )
+    return _render(
+        request, "leads.html", account,
+        active="leads", leads=list(reversed(filtered)), stats=stats,
+        lead_count=stats["total"], q=q, score_filter=score,
+        status_filter=status_filter, all_statuses=all_statuses, view=view,
+    )
 
-    # Filters are applied in Python: per-tenant lead volumes are small, and
-    # this keeps the query layer free of ad-hoc search plumbing for now.
-    if q:
-        needle = q.lower()
-        leads = [
-            lead for lead in leads
-            if needle in " ".join(
-                str(lead.get(f, "")) for f in
-                ("name", "phone", "location_pref", "property_type", "budget", "last_message")
-            ).lower()
-        ]
-    if score:
-        leads = [lead for lead in leads if (lead.get("score") or "").upper() == score.upper()]
-    if status_filter:
-        leads = [lead for lead in leads if lead.get("status") == status_filter]
 
-    return _render(request, "leads.html", account,
-                   active="leads", leads=list(reversed(leads)), stats=stats,
-                   lead_count=stats["total"], q=q, score_filter=score,
-                   status_filter=status_filter, all_statuses=all_statuses)
+@app.get("/dashboard/leads.csv")
+def dashboard_leads_csv(
+    request: Request,
+    q: str = "",
+    score: str = "",
+    status_filter: str = "",
+    view: str = "call",
+    account: dict = Depends(auth.get_current_account),
+):
+    gate = _require_onboarding(account)
+    if gate:
+        return gate
+    leads = _apply_lead_filters(
+        db.get_all_leads(account["id"]),
+        q=q, score=score, status_filter=status_filter, view=view,
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "name", "phone", "score", "score_reason", "status", "qualification_status",
+        "budget", "location", "timeline", "property_type", "source", "campaign",
+        "gclid", "updated_at",
+    ])
+    for lead in reversed(leads):
+        writer.writerow([
+            lead.get("name", ""), lead.get("phone", ""), lead.get("score", ""),
+            lead.get("score_reason", ""), lead.get("status", ""),
+            lead.get("qualification_status", ""), lead.get("budget", ""),
+            lead.get("location_pref", ""), lead.get("timeline", ""),
+            lead.get("property_type", ""), lead.get("source", ""),
+            lead.get("campaign", ""), lead.get("gclid", ""), lead.get("updated_at", ""),
+        ])
+    buf.seek(0)
+    filename = f"leads-{view}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/dashboard/leads/{lead_id}", response_class=HTMLResponse)
+def dashboard_lead_detail(
+    request: Request, lead_id: UUID, account: dict = Depends(auth.get_current_account)
+):
+    gate = _require_onboarding(account)
+    if gate:
+        return gate
+    lead = db.get_lead_by_id(account["id"], lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return _render(request, "lead_detail.html", account, active="leads", lead=lead)
+
+
+@app.post("/dashboard/leads/{lead_id}/status")
+def dashboard_lead_status(
+    lead_id: UUID,
+    status_value: str = Form(..., alias="status"),
+    account: dict = Depends(auth.get_current_account),
+):
+    lead = db.get_lead_by_id(account["id"], lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    allowed = {"contacted", "visit_booked", "qualified", "dead"}
+    if status_value not in allowed:
+        raise HTTPException(status_code=400, detail="Unknown status")
+    db.update_lead_fields(account["id"], lead["phone"], {"status": status_value})
+    return RedirectResponse(
+        url=f"/dashboard/leads/{lead_id}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/dashboard/leads/{lead_id}/delete")
+def dashboard_lead_delete(
+    lead_id: UUID, account: dict = Depends(auth.get_current_account)
+) -> Response:
+    if not db.delete_lead(account["id"], lead_id):
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return RedirectResponse(url="/dashboard/leads?view=all", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/dashboard/leads/bulk-delete")
+async def dashboard_leads_bulk_delete(
+    request: Request, account: dict = Depends(auth.get_current_account)
+) -> Response:
+    form = await request.form()
+    scope = str(form.get("scope") or "selected")
+    view = str(form.get("view") or "all")
+    if scope == "pending":
+        db.delete_pending_leads(account["id"])
+        dest = "/dashboard/leads?view=pending"
+    else:
+        ids = [str(v) for v in form.getlist("lead_ids")]
+        db.delete_leads(account["id"], ids)
+        dest = f"/dashboard/leads?view={view}" if view in {"call", "cold", "pending", "all"} else "/dashboard/leads?view=all"
+    return RedirectResponse(url=dest, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/dashboard/properties", response_class=HTMLResponse)
@@ -334,6 +539,7 @@ async def dashboard_add_property(
     price: str = Form(default=""),
     available: str = Form(default="yes"),
     photos: list[UploadFile] = File(default=[]),
+    nxt: str = Form(default=""),
 ) -> Response:
     media_urls: list[str] = []
     for photo in photos:
@@ -360,6 +566,9 @@ async def dashboard_add_property(
         {"title": title, "type": type, "location": location, "price": price,
          "media_urls": media_urls, "available": available},
     )
+    dest = (nxt or request.query_params.get("next") or "").strip()
+    if dest.startswith("/onboarding"):
+        return RedirectResponse(url=dest, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/dashboard/properties", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -403,9 +612,20 @@ def playground_chat(payload: PlaygroundIn, account: dict = Depends(auth.get_curr
 
 
 @app.get("/dashboard/settings", response_class=HTMLResponse)
-def dashboard_settings(request: Request, saved: int = 0,
-                       account: dict = Depends(auth.get_current_account)):
-    return _render(request, "settings.html", account, active="settings", saved=bool(saved))
+def dashboard_settings(
+    request: Request,
+    saved: int = 0,
+    token: str = "",
+    account: dict = Depends(auth.get_current_account),
+):
+    ingest_url = ""
+    if account.get("has_ingest_token") or token:
+        base = (config.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")).rstrip("/")
+        ingest_url = f"{base}/api/v1/leads"
+    return _render(
+        request, "settings.html", account, active="settings",
+        saved=bool(saved), ingest_token=token, ingest_url=ingest_url,
+    )
 
 
 @app.post("/dashboard/settings")
@@ -422,6 +642,14 @@ async def dashboard_settings_submit(
          "custom_instructions": custom_instructions},
     )
     return RedirectResponse(url="/dashboard/settings?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/dashboard/settings/ingest-token")
+def dashboard_rotate_ingest_token(account: dict = Depends(auth.get_current_account)) -> Response:
+    token = db.rotate_ingest_token(account["id"])
+    return RedirectResponse(
+        url=f"/dashboard/settings?token={token}", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 # --- Import leads from a spreadsheet ----------------------------------------
@@ -453,66 +681,77 @@ async def dashboard_import_preview(
 
 class ImportConfirmIn(BaseModel):
     leads: list[dict]
+    source: str = "google-ads"
 
 
 @app.post("/dashboard/import/confirm")
 def dashboard_import_confirm(
     payload: ImportConfirmIn, account: dict = Depends(auth.get_current_account)
 ) -> dict:
-    """Write the previewed leads. Existing phones are updated, not duplicated."""
+    """Write previewed leads as pending — callers do not see them until scored."""
+    default_source = payload.source.strip() or "google-ads"
     created = updated = 0
     for entry in payload.leads:
-        phone = normalize_phone(entry.get("phone", ""))
-        if not phone:
+        try:
+            kind, _ = _ingest_lead(
+                account["id"],
+                {**entry, "source": entry.get("source") or default_source},
+                default_source=default_source,
+            )
+        except ValueError:
             continue
-        existing = db.get_lead(account["id"], phone)
-        db.upsert_lead(account["id"], {
-            "phone": phone,
-            "name": entry.get("name", ""),
-            "source": "excel-import",
-            # Don't reset someone already mid-conversation back to 'new'.
-            **({} if existing else {"status": "new"}),
-        })
-        if existing:
-            updated += 1
-        else:
+        if kind == "created":
             created += 1
+        else:
+            updated += 1
 
     log.info("Imported leads for %s: %d new, %d updated", account.get("slug"), created, updated)
-    return {"created": created, "updated": updated}
+    return {"created": created, "updated": updated, "whatsapp_connected": account.get("whatsapp_status") == "connected"}
 
 
 # --- Sending WhatsApp openers ------------------------------------------------
 
 
 class SendOpenersIn(BaseModel):
-    phones: list[str] = []       # empty = every lead with status 'new'
+    phones: list[str] = []       # empty = every pending lead
 
 
 @app.post("/dashboard/send-openers")
 def dashboard_send_openers(
     payload: SendOpenersIn, account: dict = Depends(auth.get_current_account)
 ) -> dict:
-    """Send the opening WhatsApp message and report per-lead outcomes.
-
-    Deliberately returns a row per lead rather than a single count: on the
-    Twilio sandbox most failures are "this number hasn't joined yet", and the
-    agency needs to see exactly which numbers those were.
-    """
+    """Send the opening WhatsApp message — only if this tenant connected WhatsApp."""
+    if account.get("whatsapp_status") != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Connect this agency's WhatsApp number before sending openers.",
+        )
     leads = db.get_all_leads(account["id"])
     if payload.phones:
         wanted = {normalize_phone(p) for p in payload.phones}
         targets = [l for l in leads if l["phone"] in wanted]
     else:
-        targets = [l for l in leads if l.get("status") == "new"]
+        targets = [l for l in leads if (l.get("qualification_status") or "") == "pending"]
+    if len(targets) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Refusing to WhatsApp {len(targets)} leads at once (sandbox daily limit). "
+                "Delete dummy CSV rows first, or send to at most 10 numbers."
+            ),
+        )
 
     results = []
     for lead in targets:
         name = lead.get("name") or "there"
         body = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
         try:
-            twilio_client.send_whatsapp(account, lead["phone"], body)
-            db.update_lead_fields(account["id"], lead["phone"], {"status": "contacted"})
+            twilio_client.send_whatsapp(account, lead["phone"], body, own_only=True)
+            db.update_lead_fields(
+                account["id"],
+                lead["phone"],
+                {"status": "contacted", "qualification_status": "in_conversation"},
+            )
             results.append({"phone": lead["phone"], "name": name, "ok": True, "error": ""})
         except Exception as e:  # noqa: BLE001 - one bad number must not stop the run
             log.warning("Opener failed for %s: %s", lead["phone"], e)
@@ -529,23 +768,49 @@ def dashboard_send_openers(
 @app.get("/dashboard/whatsapp", response_class=HTMLResponse)
 def dashboard_whatsapp(request: Request, saved: int = 0,
                        account: dict = Depends(auth.get_current_account)):
+    from app import crypto
+
+    error = ""
+    if not crypto.encryption_ready():
+        error = (
+            "Twilio credentials cannot be saved until ENCRYPTION_KEY is set on the host. "
+            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        )
     return _render(request, "whatsapp.html", account, active="whatsapp",
-                   saved=bool(saved), error="", test_result=None)
+                   saved=bool(saved), error=error, test_result=None)
 
 
 @app.post("/dashboard/whatsapp")
 async def dashboard_whatsapp_save(
+    request: Request,
     account: dict = Depends(auth.get_current_account),
     twilio_account_sid: str = Form(...),
     twilio_auth_token: str = Form(...),
     whatsapp_number: str = Form(...),
 ) -> Response:
+    from app import crypto
+
     number = whatsapp_number.strip()
     if not number.startswith("whatsapp:"):
         number = f"whatsapp:{normalize_phone(number)}"
-    db.set_whatsapp_credentials(
-        account["id"], twilio_account_sid, twilio_auth_token, number, status="connected"
-    )
+    try:
+        db.set_whatsapp_credentials(
+            account["id"], twilio_account_sid, twilio_auth_token, number, status="connected"
+        )
+    except crypto.EncryptionNotConfigured as e:
+        return _render(
+            request, "whatsapp.html", account, active="whatsapp",
+            saved=False, error=str(e), test_result=None,
+        )
+    except Exception as e:  # noqa: BLE001 - show a usable message instead of a 500
+        log.exception("Saving WhatsApp credentials failed for %s: %s", account.get("slug"), e)
+        return _render(
+            request, "whatsapp.html", account, active="whatsapp",
+            saved=False,
+            error="Could not save the Twilio connection. Confirm ENCRYPTION_KEY is set "
+                  "and Alembic migrations have run (whatsapp columns on accounts).",
+            test_result=None,
+        )
     return RedirectResponse(url="/dashboard/whatsapp?saved=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -604,19 +869,30 @@ def demo_page(slug: str) -> str:
 
 
 @app.post("/demo/{slug}/start")
-def demo_start(slug: str, payload: DemoStartIn) -> dict:
+def demo_start(request: Request, slug: str, payload: DemoStartIn) -> dict:
+    if not ratelimit.limiter.allow(f"demo:{_client_ip(request)}:{slug}", limit=30, window_s=60):
+        raise HTTPException(status_code=429, detail="Too many requests")
     account = _get_account_or_404(slug)
     phone = web_session_phone(payload.session_id)
     name = payload.name.strip() or "there"
     db.upsert_lead(
-        account["id"], {"phone": phone, "name": name, "source": "web-demo", "status": "contacted"}
+        account["id"],
+        {
+            "phone": phone,
+            "name": name,
+            "source": "web-demo",
+            "status": "contacted",
+            "qualification_status": "in_conversation",
+        },
     )
     opener = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
     return {"reply_text": opener, "quick_replies": ["YES"]}
 
 
 @app.post("/demo/{slug}/chat")
-def demo_chat(slug: str, payload: DemoChatIn) -> dict:
+def demo_chat(request: Request, slug: str, payload: DemoChatIn) -> dict:
+    if not ratelimit.limiter.allow(f"demo:{_client_ip(request)}:{slug}", limit=30, window_s=60):
+        raise HTTPException(status_code=429, detail="Too many requests")
     account = _get_account_or_404(slug)
     phone = web_session_phone(payload.session_id)
     reply = run_conversation_turn(account, phone, payload.message, payload.name, source="web-demo")
@@ -637,3 +913,97 @@ def demo_history(slug: str, session_id: str) -> dict:
     if not lead:
         return {"exists": False, "history": []}
     return {"exists": True, "name": lead.get("name", ""), "history": lead.get("history_json") or []}
+
+
+# --- First-run onboarding ---------------------------------------------------
+
+
+@app.get("/onboarding", response_class=HTMLResponse)
+def onboarding_page(
+    request: Request,
+    step: int = 1,
+    token: str = "",
+    account: dict = Depends(auth.get_current_account),
+):
+    if account.get("onboarding_completed_at"):
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    step = min(max(step, 1), 4)
+    ingest_url = ""
+    base = (config.PUBLIC_BASE_URL or str(request.base_url).rstrip("/")).rstrip("/")
+    if token:
+        ingest_url = f"{base}/api/v1/leads"
+    return _render(
+        request, "onboarding.html", account,
+        active="overview", step=step, ingest_token=token, ingest_url=ingest_url,
+        property_types=_PROPERTY_TYPES,
+    )
+
+
+@app.post("/onboarding/profile")
+async def onboarding_profile(
+    account: dict = Depends(auth.get_current_account),
+    agency_name: str = Form(...),
+    agent_name: str = Form(...),
+    city: str = Form(default=""),
+) -> Response:
+    db.update_account(
+        account["id"],
+        {"agency_name": agency_name, "agent_name": agent_name, "city": city},
+    )
+    return RedirectResponse(url="/onboarding?step=2", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/onboarding/ingest-token")
+def onboarding_ingest_token(account: dict = Depends(auth.get_current_account)) -> Response:
+    token = db.rotate_ingest_token(account["id"])
+    return RedirectResponse(
+        url=f"/onboarding?step=4&token={token}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/onboarding/complete")
+def onboarding_complete(account: dict = Depends(auth.get_current_account)) -> Response:
+    db.mark_onboarding_complete(account["id"])
+    return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Public ingest webhook (Zapier / landing form / Google Ads) -------------
+
+
+class IngestLeadIn(BaseModel):
+    phone: str
+    name: str = ""
+    source: str = "webhook"
+    campaign: str = ""
+    gclid: str = ""
+
+
+@app.post("/api/v1/leads")
+def api_ingest_lead(
+    request: Request,
+    payload: IngestLeadIn,
+    authorization: str = Header(default=""),
+) -> dict:
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing Bearer ingest token")
+    if not ratelimit.limiter.allow(f"ingest:{token[:12]}", limit=60, window_s=60):
+        raise HTTPException(status_code=429, detail="Too many ingest requests")
+    account = db.get_account_by_ingest_token(token)
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid ingest token")
+    try:
+        kind, lead = _ingest_lead(
+            account["id"],
+            payload.model_dump(),
+            default_source="webhook",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "ok": True,
+        "created": kind == "created",
+        "phone": lead.get("phone"),
+        "qualification_status": lead.get("qualification_status"),
+    }
+

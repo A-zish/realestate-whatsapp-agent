@@ -20,25 +20,15 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 
-# --- Google Sheets ---
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv(
-    "GOOGLE_SERVICE_ACCOUNT_JSON", "./service_account.json"
-)
-
-# --- Branding ---
+# --- Branding (legacy env; per-account agent_name/city now live on accounts) ---
 BUILDER_NAME = os.getenv("BUILDER_NAME", "Your Builder Name")
-# The human persona the AI plays (a named sales exec, not a faceless "assistant").
 AGENT_NAME = os.getenv("AGENT_NAME", "Priya")
 
-# --- Admin panel (manage inventory) ---
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "changeme")
-
-# Public base URL of THIS server (the tunnel/host), used to build absolute
-# image URLs for uploaded property photos so Twilio can fetch them.
-# e.g. https://xxxx.trycloudflare.com  (no trailing slash)
+# Public base URL of THIS server, used to build absolute media URLs and
+# the Twilio webhook validation URL. No trailing slash.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
+_INSECURE_SESSION_DEFAULT = "dev-insecure-secret-change-me"
 
 # --- Supabase (multi-tenant SaaS: Postgres + Auth + Storage) ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -49,8 +39,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 # Direct Postgres connection string (from Supabase project settings), used by
 # SQLAlchemy for accounts/leads/properties. Distinct from Supabase's REST API.
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-# Signs our own session cookie (itsdangerous) after Supabase verifies login.
-SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me")
+# Signs the session cookie. Must be set — the insecure default is refused at boot.
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+# Session cookie Secure flag. Defaults on for https PUBLIC_BASE_URL.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "").lower()
 STORAGE_BUCKET = os.getenv("STORAGE_BUCKET", "property-media")
 
 # Fernet key encrypting third-party credentials (agency Twilio tokens) at rest.
@@ -66,4 +58,24 @@ def require(*names: str) -> None:
             "Missing required environment variables: "
             + ", ".join(missing)
             + ". Copy .env.example to .env and fill them in."
+        )
+
+
+def cookie_secure() -> bool:
+    """HttpOnly cookies also need Secure on HTTPS so they are not sent over HTTP."""
+    flag = COOKIE_SECURE
+    if flag in ("1", "true", "yes"):
+        return True
+    if flag in ("0", "false", "no"):
+        return False
+    return PUBLIC_BASE_URL.startswith("https://")
+
+
+def assert_secure_session_secret() -> None:
+    """Refuse to boot with a missing or well-known session signing key."""
+    secret = (SESSION_SECRET or "").strip()
+    if not secret or secret == _INSECURE_SESSION_DEFAULT:
+        raise RuntimeError(
+            "SESSION_SECRET is missing or still the insecure default. "
+            "Set a random value: python -c \"import secrets; print(secrets.token_hex(32))\""
         )

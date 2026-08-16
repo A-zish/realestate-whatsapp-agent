@@ -1,23 +1,10 @@
-"""Postgres access — the multi-tenant datastore (replaces app/sheets.py).
+"""Postgres access — the multi-tenant datastore.
 
 Every function that touches leads or properties takes `account_id` as its
-first argument and only ever reads/writes rows scoped to that account — this
-is the entire tenant-isolation guarantee for the whole app. There is no
-function here that can read across accounts (except the account-lookup
-helpers themselves, which by definition operate on the accounts table).
-
-Public API mirrors the old app/sheets.py shape so app/main.py and
-app/agent.py stay easy to read, but everything is account-scoped:
-    get_lead(account_id, phone)                  -> dict | None
-    get_all_leads(account_id)                     -> list[dict]
-    upsert_lead(account_id, data)                  -> dict
-    update_lead_fields(account_id, phone, fields)  -> dict
-    get_properties(account_id, only_available)     -> list[dict]
-    add_property(account_id, data)                 -> dict
-    get_account_by_slug(slug) / by_id(id) / by_twilio_number(to)
-    create_account(agency_name) / update_account(account_id, fields)
-    get_user_by_email(email) / create_user(...) / get_account_id_for_user(id)
+first argument and only ever reads/writes rows scoped to that account.
 """
+import hashlib
+import hmac
 import logging
 import re
 import secrets
@@ -74,6 +61,10 @@ def _account_to_dict(a: Account) -> dict:
         "twilio_account_sid": a.twilio_account_sid,
         "whatsapp_status": a.whatsapp_status,
         "has_own_twilio": bool(a.twilio_account_sid and a.twilio_auth_token_enc),
+        "has_ingest_token": bool(a.ingest_token_hash),
+        "onboarding_completed_at": (
+            a.onboarding_completed_at.isoformat() if a.onboarding_completed_at else ""
+        ),
     }
 
 
@@ -109,19 +100,15 @@ def get_account_by_id(account_id) -> dict | None:
 
 
 def get_account_by_twilio_number(to_number: str) -> dict | None:
-    """Resolve which tenant owns an inbound WhatsApp number (webhook routing)."""
+    """Resolve which tenant owns an inbound WhatsApp number.
+
+    Exact match only — never fall back to "the only connected tenant".
+    """
     with _session() as session:
         account = session.scalar(
             select(Account).where(Account.twilio_whatsapp_from == to_number)
         )
-        if account:
-            return _account_to_dict(account)
-        # Fallback: while only one account has a WhatsApp number configured
-        # at all (pre-multi-number-onboarding), route everything to it.
-        only = session.scalars(select(Account).where(Account.twilio_whatsapp_from.isnot(None))).all()
-        if len(only) == 1:
-            return _account_to_dict(only[0])
-        return None
+        return _account_to_dict(account) if account else None
 
 
 def get_whatsapp_credentials(account_id) -> dict | None:
@@ -176,7 +163,7 @@ def clear_whatsapp_credentials(account_id) -> None:
 def update_account(account_id, fields: dict) -> dict:
     """Partial update of an account's branding/settings."""
     allowed = {"agency_name", "agent_name", "city", "custom_instructions",
-               "twilio_whatsapp_from", "whatsapp_status"}
+               "twilio_whatsapp_from", "whatsapp_status", "onboarding_completed_at"}
     with _session() as session:
         account = session.get(Account, account_id)
         if account is None:
@@ -224,16 +211,54 @@ def get_account_id_for_user(user_id) -> str | None:
         return str(user.account_id) if user else None
 
 
+def _hash_ingest_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def rotate_ingest_token(account_id) -> str:
+    """Create a new ingest token. Plaintext is returned once; only the hash is stored."""
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_ingest_token(token)
+    with _session() as session:
+        account = session.get(Account, account_id)
+        if account is None:
+            raise ValueError(f"No such account: {account_id}")
+        account.ingest_token_hash = token_hash
+        session.commit()
+    log.info("Rotated ingest token for account %s", account_id)
+    return token
+
+
+def get_account_by_ingest_token(token: str) -> dict | None:
+    if not token:
+        return None
+    token_hash = _hash_ingest_token(token)
+    with _session() as session:
+        accounts = session.scalars(
+            select(Account).where(Account.ingest_token_hash.isnot(None))
+        ).all()
+        for account in accounts:
+            if account.ingest_token_hash and hmac.compare_digest(account.ingest_token_hash, token_hash):
+                return _account_to_dict(account)
+    return None
+
+
+def mark_onboarding_complete(account_id) -> dict:
+    return update_account(account_id, {"onboarding_completed_at": datetime.now(timezone.utc)})
+
+
 # --- Leads ---------------------------------------------------------------
 
 
 def _lead_to_dict(lead: Lead) -> dict:
     return {
+        "id": str(lead.id),
         "phone": lead.phone,
         "name": lead.name,
         "source": lead.source,
         "status": lead.status,
         "score": lead.score,
+        "score_reason": lead.score_reason or "",
         "stage": lead.stage,
         "intent": lead.intent,
         "location_pref": lead.location_pref,
@@ -242,13 +267,17 @@ def _lead_to_dict(lead: Lead) -> dict:
         "timeline": lead.timeline,
         "last_message": lead.last_message,
         "history_json": lead.history_json or [],
+        "campaign": lead.campaign or "",
+        "gclid": lead.gclid or "",
+        "qualification_status": lead.qualification_status or "pending",
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else "",
     }
 
 
 _LEAD_FIELDS = (
-    "name", "source", "status", "score", "stage", "intent", "location_pref",
-    "property_type", "budget", "timeline", "last_message", "history_json",
+    "name", "source", "status", "score", "score_reason", "stage", "intent",
+    "location_pref", "property_type", "budget", "timeline", "last_message",
+    "history_json", "campaign", "gclid", "qualification_status",
 )
 
 
@@ -267,6 +296,14 @@ def get_all_leads(account_id) -> list[dict]:
             select(Lead).where(Lead.account_id == account_id).order_by(Lead.updated_at)
         ).all()
         return [_lead_to_dict(lead) for lead in leads]
+
+
+def get_lead_by_id(account_id, lead_id) -> dict | None:
+    with _session() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None or str(lead.account_id) != str(account_id):
+            return None
+        return _lead_to_dict(lead)
 
 
 def get_lead_stats(account_id) -> dict:
@@ -294,6 +331,7 @@ def get_lead_stats(account_id) -> dict:
         "warm": scores["WARM"],
         "cold": scores["COLD"],
         "unscored": scores["UNSCORED"],
+        "pending": sum(1 for lead in leads if (lead.get("qualification_status") or "") == "pending"),
         "visits_booked": statuses.get("visit_booked", 0),
         "qualified": statuses.get("qualified", 0) + statuses.get("visit_booked", 0),
         "engaged": engaged,
@@ -332,6 +370,55 @@ def update_lead_fields(account_id, phone: str, fields: dict) -> dict:
     """Partial update of specific columns for an existing (or new) lead."""
     phone = normalize_phone(phone)
     return upsert_lead(account_id, {**fields, "phone": phone})
+
+
+def delete_lead(account_id, lead_id) -> bool:
+    """Permanently remove one lead owned by this account. Returns False if missing."""
+    with _session() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None or str(lead.account_id) != str(account_id):
+            return False
+        session.delete(lead)
+        session.commit()
+        log.info("Deleted lead %s (account=%s)", lead_id, account_id)
+        return True
+
+
+def delete_leads(account_id, lead_ids: list) -> int:
+    """Delete the given lead ids that belong to this account. Ignores others."""
+    ids: list[uuid.UUID] = []
+    for raw in lead_ids:
+        try:
+            ids.append(uuid.UUID(str(raw)))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return 0
+    with _session() as session:
+        rows = session.scalars(
+            select(Lead).where(Lead.account_id == account_id, Lead.id.in_(ids))
+        ).all()
+        for lead in rows:
+            session.delete(lead)
+        session.commit()
+        log.info("Deleted %d leads (account=%s)", len(rows), account_id)
+        return len(rows)
+
+
+def delete_pending_leads(account_id) -> int:
+    """Remove every pending (unscored import) lead for this account."""
+    with _session() as session:
+        rows = session.scalars(
+            select(Lead).where(
+                Lead.account_id == account_id,
+                Lead.qualification_status == "pending",
+            )
+        ).all()
+        for lead in rows:
+            session.delete(lead)
+        session.commit()
+        log.info("Deleted %d pending leads (account=%s)", len(rows), account_id)
+        return len(rows)
 
 
 # --- Properties ----------------------------------------------------------

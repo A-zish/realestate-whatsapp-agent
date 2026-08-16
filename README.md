@@ -50,10 +50,11 @@ or point at your own Supabase project for local dev.
 |---|---|
 | `DATABASE_URL` | Postgres connection string. Use Supabase's **Session pooler** URI (the direct one is IPv6-only and fails on some hosts). Percent-encode special characters in the password. |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Used only for Storage uploads |
-| `SESSION_SECRET` | Signs session cookies. `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `SESSION_SECRET` | Signs session cookies. Required. `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `COOKIE_SECURE` | `false` on localhost HTTP; omit or `true` behind HTTPS |
+| `PUBLIC_BASE_URL` | This server's public URL, used to build shareable/lead links and validate Twilio webhooks |
 | `GROQ_API_KEY` | The LLM. Free tier at console.groq.com |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | WhatsApp channel |
-| `PUBLIC_BASE_URL` | This server's public URL, used to build shareable/lead links |
 | `STORAGE_BUCKET` | Defaults to `property-media` |
 
 ---
@@ -90,7 +91,10 @@ Two different things that used to be one confusing URL:
 - **`/dashboard/playground`** — the agency testing their own agent. Chat
   history lives in the browser only; **nothing is written to the database.**
 - **`/demo/<account-slug>`** — the real, public capture link. Every
-  conversation creates and updates a scored lead.
+  conversation creates and updates a scored lead. Point Google Ads at this URL.
+
+Imported CSV / `POST /api/v1/leads` rows stay **pending** until scored and
+do not appear on the default caller queue (HOT + WARM).
 
 ---
 
@@ -126,14 +130,9 @@ request takes ~50s. Open the link a minute before a client demo.
 
 ## Known gaps / roadmap
 
-- **Team members & roles** — one login per agency today; invites + Owner /
-  Manager / Agent roles not built yet
-- **Lead import UI** — `scripts/import_leads.py` exists but isn't exposed in
-  the dashboard, and still needs account scoping
-- **Conversation view** — leads table doesn't yet open the full transcript
+- **Team members & roles** — one login per agency today
 - **Human takeover** — no way to pause the AI and reply manually
-- **WhatsApp per agency** — one shared Twilio sandbox number; production
-  needs Meta business verification + approved templates per agency
+- **WhatsApp Cloud API** — per-agency Twilio is supported; Meta verification still required for production volume
+- **Google Ads offline conversions** — GCLID is stored, not uploaded yet
 - **Billing** — not started
-- `app/sheets.py` is dead code from the pre-Postgres version, kept only for
-  reference; safe to delete
+- `app/sheets.py` is dead code from the pre-Postgres version; safe to delete

@@ -9,9 +9,13 @@
 
 {% block content %}
 
+{% if property_count == 0 %}
+<div class="alert alert-info u-mb-16">Add at least one property so the agent does not stall on inventory. <a href="/dashboard/properties" style="font-weight:600">Add a listing</a></div>
+{% endif %}
+
 <div class="page-head">
   <div>
-    <h1>Good to see you 👋</h1>
+    <h1>Good to see you</h1>
     <p class="sub">Here's how {{ account.agency_name }}'s AI agent is performing.</p>
   </div>
 </div>
@@ -64,7 +68,7 @@
         <h2>Recent leads</h2>
         <div class="sub">Latest conversations your agent handled</div>
       </div>
-      <a href="/dashboard/leads" class="btn btn-ghost btn-sm" style="margin-left:auto">View all →</a>
+      <a href="/dashboard/leads" class="btn btn-ghost btn-sm" style="margin-left:auto">Caller queue →</a>
     </div>
     <div class="card-body tight">
       {% if stats.recent %}
@@ -77,7 +81,7 @@
           {% for lead in stats.recent %}
             <tr>
               <td>
-                <div class="cell-primary">{{ lead.name or "Unknown" }}</div>
+                <div class="cell-primary"><a href="/dashboard/leads/{{ lead.id }}">{{ lead.name or "Unknown" }}</a></div>
                 <div class="cell-sub">{{ lead.source }}</div>
               </td>
               <td>
@@ -170,8 +174,8 @@
     </div>
     <div class="grid grid-3">
       <div>
-        <h3>📱 Google &amp; Meta Ads</h3>
-        <p class="u-muted u-sm">Use it as the landing page for your ad campaigns — every click becomes a qualified lead.</p>
+        <h3>Google Ads CTA</h3>
+        <p class="u-muted u-sm">Use this URL as the landing page. Callers then only dial HOT and WARM.</p>
       </div>
       <div>
         <h3>💬 WhatsApp &amp; Instagram</h3>

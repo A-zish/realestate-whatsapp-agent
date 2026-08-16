@@ -27,6 +27,7 @@ _JSON_SCHEMA = """{
   "quick_replies": ["short option 1", "short option 2"],
   "extracted": {"intent":"", "location_pref":"", "property_type":"", "budget":"", "timeline":""},
   "score": "HOT|WARM|COLD|null",
+  "score_reason": "one short sentence: why this score (required whenever score is set)",
   "status": "qualifying|qualified|visit_booked|dead|contacted",
   "stage": "string"
 }"""
@@ -83,8 +84,10 @@ quick_replies with 2-5 short tappable labels. Leave quick_replies empty ([]) for
 (location, exact budget amount, name, etc.).
 
 Score the lead: HOT = clear budget + timeline within 3 months + wants a visit; WARM = interested but vague \
-on budget/timeline; COLD = just browsing, no budget, or not buying. If they ask to book a visit, set \
-status=visit_booked and confirm you'll have the team reach out.
+on budget/timeline; COLD = just browsing, no budget, not buying, job/vendor enquiry, or budget/location \
+far from INVENTORY. Always set score_reason to one short sentence the call-centre can trust — for COLD \
+say the disqualify reason (wrong city, budget far below inventory, not buying, job enquiry). If they ask \
+to book a visit, set status=visit_booked and confirm you'll have the team reach out.
 
 INVENTORY:
 {properties_json}
@@ -192,6 +195,11 @@ def run_agent(account: dict, lead: dict, user_message: str) -> dict:
     if not isinstance(replies, list):
         replies = []
     action["quick_replies"] = [str(r).strip() for r in replies if r and str(r).strip()][:5]
+
+    reason = str(action.get("score_reason") or "").strip()
+    if reason.lower() in {"null", "none", "n/a"}:
+        reason = ""
+    action["score_reason"] = reason
 
     history.append({"role": "user", "content": user_message})
     history.append({"role": "assistant", "content": action.get("reply_text", "")})

@@ -31,18 +31,15 @@
   <div class="card">
     <div class="card-head"><div><h2>File format</h2></div></div>
     <div class="card-body">
-      <p class="u-muted u-sm u-mb-16">Two columns is all we need. Column names are detected automatically —
-        <code>Name</code>, <code>Mobile</code>, <code>Phone Number</code>, <code>WhatsApp</code> all work.</p>
+      <p class="u-muted u-sm">Two columns is the minimum (name, phone). Optional headers: <code>Campaign</code>, <code>GCLID</code>, <code>Source</code>. Google Ads lead-form exports work.</p>
       <table class="data" style="border:1px solid var(--border); border-radius:8px">
-        <thead><tr><th>Name</th><th>Phone</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>Campaign</th></tr></thead>
         <tbody>
-          <tr><td>Maviya</td><td>7891323775</td></tr>
-          <tr><td>Ashish</td><td>8209727324</td></tr>
-          <tr><td>Dushyant</td><td>8239819100</td></tr>
+          <tr><td>Maviya</td><td>7891323775</td><td>Search-Jaipur-3BHK</td></tr>
+          <tr><td>Ashish</td><td>8209727324</td><td>Search-Jaipur-3BHK</td></tr>
         </tbody>
       </table>
-      <p class="u-muted u-sm" style="margin-top:12px">Indian numbers get <code>+91</code> automatically.
-        Duplicates and rows without a valid phone are skipped.</p>
+      <p class="u-muted u-sm" style="margin-top:12px">Imported rows are <b>pending</b> — they will not appear on the caller queue until the agent scores them. GA4 pageviews are not leads.</p>
     </div>
   </div>
 </div>
@@ -68,13 +65,14 @@
       {% if parsed.leads %}
       <div class="table-wrap" style="max-height:420px; overflow-y:auto">
         <table class="data">
-          <thead><tr><th>#</th><th>Name</th><th>Phone (normalised)</th></tr></thead>
+          <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Campaign</th></tr></thead>
           <tbody>
             {% for lead in parsed.leads %}
             <tr>
               <td class="cell-sub">{{ loop.index }}</td>
               <td class="cell-primary">{{ lead.name or "—" }}</td>
               <td class="cell-muted num">{{ lead.phone }}</td>
+              <td class="cell-muted">{{ lead.campaign or "—" }}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -111,12 +109,18 @@
     <div class="card">
       <div class="card-head"><div><h2>What happens next</h2></div></div>
       <div class="card-body">
-        <p class="u-muted u-sm u-mb-16">Imported leads land in your dashboard with status <b>new</b>.
-          Then you can send them the opening WhatsApp message — the AI takes over every reply from there.</p>
+        <p class="u-muted u-sm u-mb-16">Imported leads are stored as <b>pending</b>. They stay off the caller queue until scored. Optional: send a WhatsApp opener only if this agency’s number is connected.</p>
+        <div class="field">
+          <label>Source for this file</label>
+          <select class="select" id="importSource">
+            <option value="google-ads" selected>Google Ads</option>
+            <option value="excel-import">Spreadsheet</option>
+            <option value="webhook">Other / webhook</option>
+          </select>
+        </div>
         {% if account.whatsapp_status != 'connected' %}
-        <div class="alert alert-info" style="margin:0">
-          <span>💬</span>
-          <div>WhatsApp isn't connected yet. <a href="/dashboard/whatsapp" style="color:var(--accent);font-weight:600">Connect it</a> to message these leads.</div>
+        <div class="alert alert-info" style="margin:12px 0 0">
+          <div>WhatsApp is not connected for this agency. Openers will stay disabled — use the lead link as the Ads CTA instead.</div>
         </div>
         {% endif %}
       </div>
@@ -143,17 +147,20 @@
       const res = await fetch("/dashboard/import/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leads: LEADS })
+        body: JSON.stringify({ leads: LEADS, source: document.getElementById("importSource").value })
       });
       const data = await res.json();
       const box = document.getElementById("importResult");
       box.style.display = "block";
+      let extra = ' — <a href="/dashboard/leads?view=pending" style="color:inherit;text-decoration:underline">view pending</a>';
+      if (data.whatsapp_connected) {
+        extra += ' or send WhatsApp openers from the pending view.';
+      }
       box.innerHTML =
         '<div class="alert alert-success"><span>✓</span><div><b>' +
-        data.created + ' new lead(s) imported</b>' +
+        data.created + ' new lead(s) imported as pending</b>' +
         (data.updated ? ', ' + data.updated + ' existing updated' : '') +
-        ' — <a href="/dashboard/leads" style="color:inherit;text-decoration:underline">view them</a>' +
-        ' or <a href="/dashboard/whatsapp" style="color:inherit;text-decoration:underline">send WhatsApp openers</a>.</div></div>';
+        extra + '</div></div>';
       btn.textContent = "Imported ✓";
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {

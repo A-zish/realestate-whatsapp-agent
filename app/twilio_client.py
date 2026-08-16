@@ -34,16 +34,22 @@ def _get_platform_client() -> Client:
     return _platform_client
 
 
-def get_sender(account: dict) -> tuple[Client, str]:
+def get_sender(account: dict, *, own_only: bool = False) -> tuple[Client, str]:
     """Return (client, from_number) for this account.
 
-    Prefers the agency's own Twilio credentials; otherwise uses the platform
-    sandbox. Raises WhatsAppNotConfigured if neither is usable.
+    Prefers the agency's own Twilio credentials. Platform sandbox is only used
+    when own_only is False (inbound webhook / test). Openers must pass
+    own_only=True so a second tenant never rides the shared number.
     """
     creds = db.get_whatsapp_credentials(account["id"])
     if creds:
         from_number = creds["whatsapp_from"] or config.TWILIO_WHATSAPP_FROM
         return Client(creds["account_sid"], creds["auth_token"]), _to_whatsapp(from_number)
+
+    if own_only:
+        raise WhatsAppNotConfigured(
+            "Connect this agency's own WhatsApp number before sending openers."
+        )
 
     if not (config.TWILIO_ACCOUNT_SID and config.TWILIO_AUTH_TOKEN):
         raise WhatsAppNotConfigured(
@@ -53,9 +59,16 @@ def get_sender(account: dict) -> tuple[Client, str]:
     return _get_platform_client(), _to_whatsapp(from_number)
 
 
-def send_whatsapp(account: dict, to: str, body: str, media_urls: list[str] | None = None) -> str:
+def send_whatsapp(
+    account: dict,
+    to: str,
+    body: str,
+    media_urls: list[str] | None = None,
+    *,
+    own_only: bool = False,
+) -> str:
     """Send one WhatsApp message as this account. Returns the Twilio message SID."""
-    client, from_number = get_sender(account)
+    client, from_number = get_sender(account, own_only=own_only)
     kwargs = {"from_": from_number, "to": _to_whatsapp(to), "body": body}
     if media_urls:
         kwargs["media_url"] = media_urls

@@ -20,11 +20,35 @@ log = logging.getLogger(__name__)
 _fernet: Fernet | None = None
 
 
+class EncryptionNotConfigured(RuntimeError):
+    """ENCRYPTION_KEY is missing or not a valid Fernet key."""
+
+
+def encryption_ready() -> bool:
+    try:
+        _get_fernet()
+        return True
+    except EncryptionNotConfigured:
+        return False
+
+
 def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is None:
-        config.require("ENCRYPTION_KEY")
-        _fernet = Fernet(config.ENCRYPTION_KEY.encode())
+        key = (config.ENCRYPTION_KEY or "").strip()
+        if not key:
+            raise EncryptionNotConfigured(
+                "ENCRYPTION_KEY is not set on the server. In Render → Environment, "
+                "add ENCRYPTION_KEY from: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            )
+        try:
+            _fernet = Fernet(key.encode())
+        except (ValueError, Exception) as e:
+            raise EncryptionNotConfigured(
+                "ENCRYPTION_KEY is set but is not a valid Fernet key (must be the "
+                "url-safe base64 string Fernet.generate_key() prints). "
+                f"Details: {e}"
+            ) from e
     return _fernet
 
 

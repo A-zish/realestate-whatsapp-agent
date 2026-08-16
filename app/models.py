@@ -4,10 +4,7 @@ Every table that holds business data carries an `account_id` (tenant). There
 is no query path in app/db.py that reads or writes leads/properties without
 one — that's the entire tenant-isolation guarantee.
 
-`profiles` links a Supabase Auth user (their `auth.users.id`) to exactly one
-account. Password hashing, signup/login verification, and password-reset
-emails are handled by Supabase Auth itself (see app/auth.py) — this app
-never stores or checks a password directly.
+Logins live in `users` (PBKDF2 hashes). See app/auth.py.
 """
 import uuid
 from datetime import datetime, timezone
@@ -51,6 +48,8 @@ class Account(Base):
     twilio_auth_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     # not_connected | sandbox | connected
     whatsapp_status: Mapped[str] = mapped_column(Text, nullable=False, default="not_connected")
+    ingest_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
@@ -100,6 +99,11 @@ class Lead(Base):
     timeline: Mapped[str] = mapped_column(Text, nullable=False, default="")
     last_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     history_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    score_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    campaign: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gclid: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # pending | in_conversation | scored
+    qualification_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
