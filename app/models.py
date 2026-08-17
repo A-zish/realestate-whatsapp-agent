@@ -46,6 +46,8 @@ class Account(Base):
     twilio_account_sid: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Fernet-encrypted — never stored or logged in plaintext. See app/crypto.py.
     twilio_auth_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Twilio Content Template SID (HX…) required on trial WhatsApp / first outbound.
+    twilio_content_sid: Mapped[str | None] = mapped_column(Text, nullable=True)
     # not_connected | sandbox | connected
     whatsapp_status: Mapped[str] = mapped_column(Text, nullable=False, default="not_connected")
     ingest_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)

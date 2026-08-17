@@ -25,6 +25,8 @@ services:
         sync: false
       - key: TWILIO_WHATSAPP_FROM
         value: "whatsapp:+14155238886"
+      - key: TWILIO_WHATSAPP_CONTENT_SID
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
@@ -38,6 +40,8 @@ services:
       - key: PUBLIC_BASE_URL
         sync: false
       - key: ENCRYPTION_KEY
+        sync: false
+      - key: COOKIE_SECURE
         sync: false
       - key: STORAGE_BUCKET
         value: property-media

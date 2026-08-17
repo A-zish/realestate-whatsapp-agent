@@ -5,29 +5,32 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Get ready for a 30-day pilot</h1>
-    <p class="sub">Four steps. Your call centre should only dial HOT and WARM after this.</p>
+    <h1>Get ready for a 30-day Ramatech pilot</h1>
+    <p class="sub">Four steps. Put the lead link on Google Ads. Callers then only dial HOT and WARM. WhatsApp is optional and not required for this pilot.</p>
+  </div>
+  <div class="page-head-actions">
+    <span class="badge badge-accent"><span class="dot"></span>Pilot · no billing</span>
   </div>
 </div>
 
 <div class="row u-mb-16" style="gap:8px; flex-wrap:wrap">
   <span class="badge {% if step >= 1 %}badge-accent{% else %}badge-neutral{% endif %}">1. Agency</span>
   <span class="badge {% if step >= 2 %}badge-accent{% else %}badge-neutral{% endif %}">2. Inventory</span>
-  <span class="badge {% if step >= 3 %}badge-accent{% else %}badge-neutral{% endif %}">3. Lead link</span>
-  <span class="badge {% if step >= 4 %}badge-accent{% else %}badge-neutral{% endif %}">4. Ingest</span>
+  <span class="badge {% if step >= 3 %}badge-accent{% else %}badge-neutral{% endif %}">3. Ads lead link</span>
+  <span class="badge {% if step >= 4 %}badge-accent{% else %}badge-neutral{% endif %}">4. Optional import</span>
 </div>
 
 {% if step == 1 %}
 <div class="card" style="max-width:560px">
-  <div class="card-head"><div><h2>Agency details</h2><div class="sub">Shown to buyers in chat</div></div></div>
+  <div class="card-head"><div><h2>Agency details</h2><div class="sub">Shown to buyers in the qualification chat</div></div></div>
   <div class="card-body">
     <form action="/onboarding/profile" method="post">
       <div class="field">
-        <label>Agency name</label>
+        <label>Agency / builder name</label>
         <input class="input" name="agency_name" value="{{ account.agency_name }}" required>
       </div>
       <div class="field">
-        <label>Agent name</label>
+        <label>Agent name (chat persona)</label>
         <input class="input" name="agent_name" value="{{ account.agent_name }}" required>
       </div>
       <div class="field">
@@ -43,11 +46,11 @@
 {% if step == 2 %}
 <div class="grid grid-2-1">
   <div class="card">
-    <div class="card-head"><div><h2>Add one property</h2><div class="sub">The agent will not invent prices or projects</div></div></div>
+    <div class="card-head"><div><h2>Add one live project</h2><div class="sub">The agent will not invent prices or projects</div></div></div>
     <div class="card-body">
       {% if property_count %}
       <div class="alert alert-success u-mb-16">{{ property_count }} listing{{ '' if property_count == 1 else 's' }} on file.</div>
-      <a href="/onboarding?step=3" class="btn btn-primary">Continue</a>
+      <a href="/onboarding?step=3" class="btn btn-primary">Continue to Ads link</a>
       {% else %}
       <form action="/dashboard/properties" method="post" enctype="multipart/form-data">
         <input type="hidden" name="nxt" value="/onboarding?step=3">
@@ -79,17 +82,27 @@
       {% endif %}
     </div>
   </div>
+  <div class="card">
+    <div class="card-head"><div><h2>Why inventory matters</h2></div></div>
+    <div class="card-body">
+      <p class="u-muted u-sm">One accurate listing is enough for the pilot. Callers trust scores more when the chat matches a real project.</p>
+    </div>
+  </div>
 </div>
 {% endif %}
 
 {% if step == 3 %}
 <div class="card" style="max-width:640px">
-  <div class="card-head"><div><h2>Google Ads landing CTA</h2></div></div>
+  <div class="card-head"><div><h2>Google Ads landing CTA (required)</h2><div class="sub">Primary pilot channel — not WhatsApp</div></div></div>
   <div class="card-body">
-    <p class="u-mb-16">Point the ad to this URL — not a raw contact form and not a GA4 event dump. Every chat is scored before a human calls.</p>
+    <p class="u-mb-16">Point the ad <b>final URL</b> to this link. Every visitor chats with your AI agent and is scored before a human calls. Do <b>not</b> use a raw contact form or GA4 pageviews as “leads.”</p>
     <div class="linkbox u-mb-16">
       <code style="flex:1">{{ lead_link }}</code>
       <button class="btn btn-secondary btn-sm" onclick="copyText('{{ lead_link }}', this)">Copy</button>
+    </div>
+    <div class="alert alert-info u-mb-16">
+      <span>💡</span>
+      <div>WhatsApp brand messaging needs Meta Business verification. Skip Channels → WhatsApp for this pilot unless Ramatech configures a production sender.</div>
     </div>
     <a href="/onboarding?step=4" class="btn btn-primary">Continue</a>
   </div>
@@ -98,9 +111,9 @@
 
 {% if step == 4 %}
 <div class="card" style="max-width:640px">
-  <div class="card-head"><div><h2>Optional: import existing Ads leads</h2></div></div>
+  <div class="card-head"><div><h2>Optional: import existing Ads leads</h2><div class="sub">Skip if you only use the live lead link</div></div></div>
   <div class="card-body">
-    <p class="u-muted u-sm u-mb-16">CSV/Excel on the Import page, or POST to the ingest webhook. Imported rows stay <b>pending</b> until the agent scores them — they will not appear on the caller queue.</p>
+    <p class="u-muted u-sm u-mb-16">CSV/Excel on Import, or POST to the ingest webhook. Imported rows stay <b>pending</b> — they stay off the caller queue until scored. Do <b>not</b> blast WhatsApp openers at a 100-row dummy list (Twilio trial limits).</p>
     {% if ingest_token %}
     <div class="alert alert-info u-mb-16">
       Copy this token now. It is not shown again.
@@ -120,9 +133,10 @@
     <form action="/onboarding/ingest-token" method="post" class="u-mb-16">
       <button type="submit" class="btn btn-secondary">Generate ingest token</button>
     </form>
+    <p class="u-muted u-sm u-mb-16">Or finish now and import later from the sidebar.</p>
     {% endif %}
     <form action="/onboarding/complete" method="post">
-      <button type="submit" class="btn btn-primary">Finish setup</button>
+      <button type="submit" class="btn btn-primary">Finish setup — open dashboard</button>
     </form>
   </div>
 </div>

@@ -84,15 +84,16 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><div><h2>WhatsApp</h2></div></div>
+      <div class="card-head"><div><h2>WhatsApp (optional)</h2></div></div>
       <div class="card-body">
         {% if account.twilio_whatsapp_from %}
           <div class="row u-mb-16"><span class="badge badge-accent"><span class="dot"></span>Connected</span></div>
           <p class="u-muted u-sm">Number: <b>{{ account.twilio_whatsapp_from.replace('whatsapp:','') }}</b></p>
         {% else %}
           <div class="row u-mb-16"><span class="badge badge-neutral">Not connected</span></div>
-          <p class="u-muted u-sm">Your agent works on the web link today. Connecting a WhatsApp Business number lets it message leads directly — that needs Meta business verification.</p>
+          <p class="u-muted u-sm">Pilot default is the <b>web lead link</b> for Google Ads. WhatsApp needs Meta Business verification and approved templates — configure under Channels → WhatsApp only when Ramatech enables a production sender.</p>
         {% endif %}
+        <a href="/dashboard/whatsapp" class="btn btn-ghost btn-sm" style="margin-top:8px">Open WhatsApp settings</a>
       </div>
     </div>
   </div>

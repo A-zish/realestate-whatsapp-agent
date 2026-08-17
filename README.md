@@ -1,13 +1,15 @@
-# LeadPilot — AI lead qualification for real estate
+# LeadPilot by Ramatech — AI lead qualification for real estate
 
-Multi-tenant SaaS. Each real estate agency signs up, gets their own AI sales
-agent, their own shareable lead-capture link, and a dashboard where every
-lead arrives already qualified and scored HOT / WARM / COLD.
+**A Ramatech product.** Multi-tenant pilot SaaS for builders and brokers.
+Each agency signs up, gets an AI qualifier, a shareable **lead link** (Google Ads
+CTA), and a caller queue of **HOT / WARM** leads — so the call centre stops
+dialling junk Ads clicks. This is a **qualification layer**, not a CRM.
 
-The agent qualifies leads over chat (web today, WhatsApp where connected):
-captures location, property type, budget and timeline, shows matching
-properties from that agency's own inventory, handles objections, and pushes
-toward booking a site visit.
+Pilot phase: **30 days, no subscription billing**. Feedback first; Razorpay
+plans come after real builders would pay.
+
+Primary channel for pilots: **web lead link**. WhatsApp is optional and needs
+Meta Business verification (not Twilio trial “Twilio Trial” branding).
 
 ---
 
@@ -21,8 +23,8 @@ toward booking a site visit.
 | Auth | Self-hosted, PBKDF2-HMAC-SHA256 (stdlib) + signed session cookie |
 | File storage | Supabase Storage (property photos/videos) |
 | LLM | Groq (`llama-3.3-70b-versatile`) — isolated in `app/agent.py`, swappable |
-| WhatsApp | Twilio (sandbox today; production needs Meta verification) |
-| Hosting | Render |
+| WhatsApp | Twilio (optional; production needs Meta verification + ContentSid) |
+| Hosting | **Render** (not Vercel — this is a long-lived Python app) |
 
 ---
 
@@ -30,32 +32,37 @@ toward booking a site visit.
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate           # Windows
-# source .venv/bin/activate      # macOS / Linux
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows
 
 pip install -r requirements.txt
-cp .env.example .env             # then fill it in — see below
-alembic upgrade head             # create the schema
+cp .env.example .env               # then fill it in — see below
+alembic upgrade head
 uvicorn app.main:app --reload --port 8000
+```
+
+Or with Docker Desktop:
+
+```bash
+docker compose up --build
 ```
 
 Open http://localhost:8000/signup and create an agency account.
 
 ### Env vars
 
-`.env` is git-ignored and never committed. Ask the project owner for values,
-or point at your own Supabase project for local dev.
+`.env` is git-ignored. See `.env.example` and [docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md).
 
 | Var | What it is |
 |---|---|
-| `DATABASE_URL` | Postgres connection string. Use Supabase's **Session pooler** URI (the direct one is IPv6-only and fails on some hosts). Percent-encode special characters in the password. |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Used only for Storage uploads |
-| `SESSION_SECRET` | Signs session cookies. Required. `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `COOKIE_SECURE` | `false` on localhost HTTP; omit or `true` behind HTTPS |
-| `PUBLIC_BASE_URL` | This server's public URL, used to build shareable/lead links and validate Twilio webhooks |
-| `GROQ_API_KEY` | The LLM. Free tier at console.groq.com |
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | WhatsApp channel |
-| `STORAGE_BUCKET` | Defaults to `property-media` |
+| `DATABASE_URL` | Postgres connection string (Supabase session pooler preferred) |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Storage uploads only |
+| `SESSION_SECRET` | Required. `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `COOKIE_SECURE` | `false` on localhost; HTTPS on Render implies secure cookies |
+| `PUBLIC_BASE_URL` | Public HTTPS URL (Render), no trailing slash |
+| `GROQ_API_KEY` | LLM |
+| `ENCRYPTION_KEY` | Fernet key for Twilio tokens at rest |
+| `TWILIO_*` / `TWILIO_WHATSAPP_CONTENT_SID` | Optional WhatsApp |
 
 ---
 
@@ -69,70 +76,21 @@ app/
   auth.py        password hashing + session cookies
   agent.py       the LLM call, system prompt, JSON parsing
   storage.py     Supabase Storage uploads
-  utils.py       phone normalization, media URL resolution
   templates/     Jinja2 pages (base.html is the shell)
   static/        design system CSS + a little JS
 alembic/         schema migrations
-scripts/         seed + test scripts (run as `python -m scripts.<name>`)
+docs/            pilot runbook
+scripts/         seed + test scripts
 ```
 
 ### The one rule: tenant isolation
 
-Every lead and property belongs to an `account_id`. **Every function in
-`app/db.py` takes `account_id` as its first argument** and only ever touches
-that account's rows. There is deliberately no "get all leads across
-accounts" function. If you add a query, keep this invariant — it's the whole
-security model of the product.
-
-### Playground vs. lead link
-
-Two different things that used to be one confusing URL:
-
-- **`/dashboard/playground`** — the agency testing their own agent. Chat
-  history lives in the browser only; **nothing is written to the database.**
-- **`/demo/<account-slug>`** — the real, public capture link. Every
-  conversation creates and updates a scored lead. Point Google Ads at this URL.
-
-Imported CSV / `POST /api/v1/leads` rows stay **pending** until scored and
-do not appear on the default caller queue (HOT + WARM).
+Every lead/property query is scoped by `account_id`. Never fall back to
+“the only WhatsApp-connected tenant” for inbound webhooks.
 
 ---
 
-## Testing
+## Deploy (Render)
 
-Scripts under `scripts/` run against a live database, so point `.env` at a
-scratch Supabase project before running them.
-
-```bash
-python -m scripts._test_ui                  # every page renders
-python -m scripts._test_multitenant_e2e     # signup, login, tenant isolation, webhook
-python -m scripts._test_storage_upload      # property media upload
-python -m scripts.test_agent                # offline agent conversation
-```
-
-They clean up the rows they create.
-
----
-
-## Deploying
-
-Render builds from `render.yaml` and runs
-`alembic upgrade head && uvicorn app.main:app`, so migrations apply on every
-deploy. Push to `main` → auto-deploy.
-
-Secrets marked `sync: false` in `render.yaml` are set by hand in Render's
-**Environment** tab; they are never in the repo.
-
-**Free-tier gotcha:** the service sleeps after ~15 min idle, so the first
-request takes ~50s. Open the link a minute before a client demo.
-
----
-
-## Known gaps / roadmap
-
-- **Team members & roles** — one login per agency today
-- **Human takeover** — no way to pause the AI and reply manually
-- **WhatsApp Cloud API** — per-agency Twilio is supported; Meta verification still required for production volume
-- **Google Ads offline conversions** — GCLID is stored, not uploaded yet
-- **Billing** — not started
-- `app/sheets.py` is dead code from the pre-Postgres version; safe to delete
+See [docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md). Service definition: `render.yaml`.
+Start command runs `alembic upgrade head` then uvicorn.

@@ -62,7 +62,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("realestate")
 
-app = FastAPI(title="Real Estate Lead Agent (Multi-tenant)")
+app = FastAPI(title="LeadPilot by Ramatech")
 
 
 @app.on_event("startup")
@@ -746,7 +746,13 @@ def dashboard_send_openers(
         name = lead.get("name") or "there"
         body = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
         try:
-            twilio_client.send_whatsapp(account, lead["phone"], body, own_only=True)
+            twilio_client.send_whatsapp(
+                account,
+                lead["phone"],
+                body,
+                own_only=True,
+                content_variables={"1": name, "2": account.get("agency_name") or "us"},
+            )
             db.update_lead_fields(
                 account["id"],
                 lead["phone"],
@@ -787,6 +793,7 @@ async def dashboard_whatsapp_save(
     twilio_account_sid: str = Form(...),
     twilio_auth_token: str = Form(...),
     whatsapp_number: str = Form(...),
+    twilio_content_sid: str = Form(default=""),
 ) -> Response:
     from app import crypto
 
@@ -795,7 +802,8 @@ async def dashboard_whatsapp_save(
         number = f"whatsapp:{normalize_phone(number)}"
     try:
         db.set_whatsapp_credentials(
-            account["id"], twilio_account_sid, twilio_auth_token, number, status="connected"
+            account["id"], twilio_account_sid, twilio_auth_token, number,
+            status="connected", content_sid=twilio_content_sid,
         )
     except crypto.EncryptionNotConfigured as e:
         return _render(
@@ -835,7 +843,15 @@ def dashboard_whatsapp_test(
         f"This is a test from your AI agent, {account.get('agent_name') or 'your assistant'}."
     )
     try:
-        sid = twilio_client.send_whatsapp(account, payload.to, body)
+        sid = twilio_client.send_whatsapp(
+            account,
+            payload.to,
+            body,
+            content_variables={
+                "1": account.get("agent_name") or "Priya",
+                "2": account.get("agency_name") or "us",
+            },
+        )
         return {"ok": True, "sid": sid, "error": ""}
     except Exception as e:  # noqa: BLE001 - report the reason in the UI
         log.warning("Test message failed for %s: %s", account.get("slug"), e)

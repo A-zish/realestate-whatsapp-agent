@@ -45,11 +45,17 @@
                    placeholder="{% if account.has_own_twilio %}•••••••• (saved — retype to change){% else %}Your auth token{% endif %}">
             <div class="hint">Stored encrypted. We never show it again after saving.</div>
           </div>
-          <div class="field">
+            <div class="field">
             <label>Your WhatsApp number</label>
             <input class="input" name="whatsapp_number" required placeholder="+14155238886"
                    value="{{ (account.twilio_whatsapp_from or '').replace('whatsapp:','') }}">
-            <div class="hint">The approved WhatsApp Business number, or the Twilio sandbox number for testing.</div>
+            <div class="hint">The approved WhatsApp Business number, or the Twilio sandbox / trial From number.</div>
+          </div>
+          <div class="field">
+            <label>Content Template SID (required on Twilio trial)</label>
+            <input class="input" name="twilio_content_sid" placeholder="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                   value="{{ account.twilio_content_sid or '' }}">
+            <div class="hint">Console → Messaging → Try out WhatsApp. Copy the <b>ContentSid</b> (starts with HX) from the sample API request. Trial accounts cannot send free-text Body.</div>
           </div>
           <button type="submit" class="btn btn-primary">Save connection</button>
           {% if account.has_own_twilio %}
@@ -93,8 +99,11 @@
       <div class="card-body">
         <h3 style="margin-bottom:6px">🧪 For testing (today, free)</h3>
         <p class="u-muted u-sm u-mb-16">
-          Use Twilio's WhatsApp <b>sandbox</b>. It works instantly — but it can only message people who
-          have first sent the sandbox join code from their own WhatsApp. Fine for demos with your own team.
+          Twilio <b>trial</b> WhatsApp is not the old sandbox free-text send. You must:
+          (1) verify each friend’s number in <b>Try out WhatsApp</b> (max 5),
+          (2) paste the trial <b>ContentSid</b> (HX…) above,
+          (3) use the From number shown on that same page.
+          Join-code alone is not enough on a new trial account.
         </p>
 
         <h3 style="margin-bottom:6px">🏢 For production (real leads)</h3>

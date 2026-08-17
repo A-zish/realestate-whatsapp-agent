@@ -19,6 +19,8 @@ ANTHROPIC_MODEL = "claude-sonnet-4-6"
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+# Trial WhatsApp requires a Content Template SID (starts with HX) instead of Body.
+TWILIO_WHATSAPP_CONTENT_SID = os.getenv("TWILIO_WHATSAPP_CONTENT_SID", "")
 
 # --- Branding (legacy env; per-account agent_name/city now live on accounts) ---
 BUILDER_NAME = os.getenv("BUILDER_NAME", "Your Builder Name")

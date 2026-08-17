@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ "Create your account" if mode == "signup" else "Sign in" }} · LeadPilot</title>
+  <title>{{ "Create your account" if mode == "signup" else "Sign in" }} · LeadPilot by Ramatech</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,15 +20,24 @@
 
     <div class="auth-logo">
       <div class="brand-mark">🏠</div>
-      <div class="auth-logo-text">LeadPilot</div>
+      <div>
+        <div class="auth-logo-text">LeadPilot</div>
+        <div class="auth-logo-sub">A Ramatech product</div>
+      </div>
     </div>
 
     <div class="card">
       <div class="card-body" style="padding:26px">
-        <h1 class="auth-title">{{ "Create your account" if mode == "signup" else "Welcome back" }}</h1>
+        <h1 class="auth-title">{{ "Start your builder pilot" if mode == "signup" else "Welcome back" }}</h1>
         <p class="auth-sub">
-          {{ "Your AI sales agent, qualifying leads 24×7." if mode == "signup" else "Sign in to your lead dashboard." }}
+          {{ "AI qualifies every enquiry so your call centre only dials HOT and WARM — not another CRM." if mode == "signup" else "Sign in to your caller queue and lead dashboard." }}
         </p>
+        {% if mode == "signup" %}
+        <div class="alert alert-info" style="margin-bottom:16px">
+          <span>🧪</span>
+          <div><b>30-day pilot.</b> Self-serve setup. No subscription billing in this phase — feedback first.</div>
+        </div>
+        {% endif %}
 
         {% if error %}<div class="alert alert-error">⚠️ {{ error }}</div>{% endif %}
 

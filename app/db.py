@@ -60,6 +60,7 @@ def _account_to_dict(a: Account) -> dict:
         "twilio_whatsapp_from": a.twilio_whatsapp_from,
         "twilio_account_sid": a.twilio_account_sid,
         "whatsapp_status": a.whatsapp_status,
+        "twilio_content_sid": a.twilio_content_sid or "",
         "has_own_twilio": bool(a.twilio_account_sid and a.twilio_auth_token_enc),
         "has_ingest_token": bool(a.ingest_token_hash),
         "onboarding_completed_at": (
@@ -127,11 +128,13 @@ def get_whatsapp_credentials(account_id) -> dict | None:
             "account_sid": account.twilio_account_sid,
             "auth_token": token,
             "whatsapp_from": account.twilio_whatsapp_from,
+            "content_sid": account.twilio_content_sid or "",
         }
 
 
 def set_whatsapp_credentials(account_id, account_sid: str, auth_token: str,
-                             whatsapp_from: str, status: str = "connected") -> dict:
+                             whatsapp_from: str, status: str = "connected",
+                             content_sid: str = "") -> dict:
     """Store an agency's own Twilio credentials, encrypting the auth token."""
     from app import crypto
 
@@ -142,6 +145,7 @@ def set_whatsapp_credentials(account_id, account_sid: str, auth_token: str,
         account.twilio_account_sid = account_sid.strip()
         account.twilio_auth_token_enc = crypto.encrypt(auth_token.strip())
         account.twilio_whatsapp_from = whatsapp_from.strip()
+        account.twilio_content_sid = (content_sid or "").strip() or None
         account.whatsapp_status = status
         session.commit()
         session.refresh(account)
@@ -156,6 +160,8 @@ def clear_whatsapp_credentials(account_id) -> None:
             return
         account.twilio_account_sid = None
         account.twilio_auth_token_enc = None
+        account.twilio_whatsapp_from = None
+        account.twilio_content_sid = None
         account.whatsapp_status = "not_connected"
         session.commit()
 

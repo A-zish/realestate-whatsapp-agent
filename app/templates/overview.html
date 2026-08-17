@@ -15,8 +15,19 @@
 
 <div class="page-head">
   <div>
-    <h1>Good to see you</h1>
-    <p class="sub">Here's how {{ account.agency_name }}'s AI agent is performing.</p>
+    <h1>Caller load at a glance</h1>
+    <p class="sub">{{ account.agency_name }} — LeadPilot scores enquiries so humans only dial HOT and WARM.</p>
+  </div>
+  <div class="page-head-actions">
+    <span class="badge badge-accent"><span class="dot"></span>Pilot · Ramatech</span>
+  </div>
+</div>
+
+<div class="alert alert-info u-mb-16">
+  <span>📞</span>
+  <div>
+    <b>How callers use this:</b> open <a href="/dashboard/leads">Caller queue</a> each morning.
+    Dial HOT/WARM only. Skip COLD (reason on the lead). Pending CSV rows are not call-ready until scored via the lead link.
   </div>
 </div>
 
@@ -174,16 +185,16 @@
     </div>
     <div class="grid grid-3">
       <div>
-        <h3>Google Ads CTA</h3>
-        <p class="u-muted u-sm">Use this URL as the landing page. Callers then only dial HOT and WARM.</p>
+        <h3>1. Google Ads (required for pilot)</h3>
+        <p class="u-muted u-sm">Paste this URL as the ad final URL / landing CTA. This is the primary channel — not WhatsApp trial.</p>
       </div>
       <div>
-        <h3>💬 WhatsApp &amp; Instagram</h3>
-        <p class="u-muted u-sm">Put it in your bio or auto-reply so enquiries get answered instantly, 24×7.</p>
+        <h3>2. Website / portal form</h3>
+        <p class="u-muted u-sm">Button or redirect after “Enquire” — same link. Optional: CSV import or ingest webhook for Ads exports.</p>
       </div>
       <div>
-        <h3>🖨️ Hoardings &amp; brochures</h3>
-        <p class="u-muted u-sm">Turn it into a QR code for site boards and print material.</p>
+        <h3>3. WhatsApp (optional later)</h3>
+        <p class="u-muted u-sm">Needs Meta Business + approved templates. Skip for the pilot unless Ramatech sets up a real sender.</p>
       </div>
     </div>
   </div>
