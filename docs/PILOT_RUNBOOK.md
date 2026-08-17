@@ -96,6 +96,9 @@ Optional WhatsApp:
 
 - Repo: `A-zish/realestate-whatsapp-agent`
 - Prefer deploying **`feat/pilot-saas`** until merged to `main`.
+- Current public host (if unchanged): `https://realestate-whatsapp-agent-006r.onrender.com`
+- **Ops action:** In Render → service → Settings → Build & Deploy → set Branch to `feat/pilot-saas` → Manual Deploy. Confirm env vars above (especially `PUBLIC_BASE_URL`, `SESSION_SECRET`, `ENCRYPTION_KEY`, `GROQ_API_KEY`, `DATABASE_URL`). After deploy, signup page must show **“A Ramatech product”**.
+- Until that branch switch (or merge to `main`), production may still serve the pre-pilot UI.
 
 ---
 
