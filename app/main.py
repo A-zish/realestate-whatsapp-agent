@@ -721,11 +721,9 @@ def dashboard_send_openers(
     payload: SendOpenersIn, account: dict = Depends(auth.get_current_account)
 ) -> dict:
     """Send the opening WhatsApp message — only if this tenant connected WhatsApp."""
-    if account.get("whatsapp_status") != "connected":
-        raise HTTPException(
-            status_code=400,
-            detail="Connect this agency's WhatsApp number before sending openers.",
-        )
+    block = db.whatsapp_send_preflight(account)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
     leads = db.get_all_leads(account["id"])
     if payload.phones:
         wanted = {normalize_phone(p) for p in payload.phones}
@@ -746,29 +744,52 @@ def dashboard_send_openers(
         name = lead.get("name") or "there"
         body = OPENER_TEMPLATE.format(name=name, builder=account["agency_name"])
         try:
-            twilio_client.send_whatsapp(
+            sid = twilio_client.send_whatsapp(
                 account,
                 lead["phone"],
                 body,
                 own_only=True,
                 content_variables={"1": name, "2": account.get("agency_name") or "us"},
             )
+            db.record_whatsapp_attempt(account["id"], lead["phone"], sid=sid, error="")
             db.update_lead_fields(
                 account["id"],
                 lead["phone"],
                 {"status": "contacted", "qualification_status": "in_conversation"},
             )
-            results.append({"phone": lead["phone"], "name": name, "ok": True, "error": ""})
+            results.append({"phone": lead["phone"], "name": name, "ok": True, "error": "", "sid": sid})
         except Exception as e:  # noqa: BLE001 - one bad number must not stop the run
+            err = twilio_client.friendly_error(e)
             log.warning("Opener failed for %s: %s", lead["phone"], e)
+            db.record_whatsapp_attempt(account["id"], lead["phone"], sid="", error=err)
             results.append({"phone": lead["phone"], "name": name, "ok": False,
-                            "error": twilio_client.friendly_error(e)})
+                            "error": err, "sid": ""})
 
     sent = sum(1 for r in results if r["ok"])
     return {"sent": sent, "failed": len(results) - sent, "results": results}
 
 
 # --- Connect WhatsApp (per agency) ------------------------------------------
+
+
+def _whatsapp_page_extras(request: Request, account: dict) -> dict:
+    from app import crypto
+
+    return {
+        "preflight": db.whatsapp_send_preflight(account),
+        "checklist": {
+            "encryption": crypto.encryption_ready(),
+            "connected": account.get("whatsapp_status") == "connected",
+            "has_creds": bool(account.get("has_own_twilio")),
+            "has_from": bool((account.get("twilio_whatsapp_from") or "").strip()),
+            "has_content_sid": bool((account.get("twilio_content_sid") or "").strip()),
+            "public_https": bool(config.PUBLIC_BASE_URL.startswith("https://")),
+            "webhook_url": (
+                f"{config.PUBLIC_BASE_URL.rstrip('/')}/webhook" if config.PUBLIC_BASE_URL else ""
+            ),
+            "lead_link": _lead_link(request, account),
+        },
+    }
 
 
 @app.get("/dashboard/whatsapp", response_class=HTMLResponse)
@@ -782,8 +803,11 @@ def dashboard_whatsapp(request: Request, saved: int = 0,
             "Twilio credentials cannot be saved until ENCRYPTION_KEY is set on the host. "
             "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
-    return _render(request, "whatsapp.html", account, active="whatsapp",
-                   saved=bool(saved), error=error, test_result=None)
+    return _render(
+        request, "whatsapp.html", account, active="whatsapp",
+        saved=bool(saved), error=error, test_result=None,
+        **_whatsapp_page_extras(request, account),
+    )
 
 
 @app.post("/dashboard/whatsapp")
@@ -791,7 +815,7 @@ async def dashboard_whatsapp_save(
     request: Request,
     account: dict = Depends(auth.get_current_account),
     twilio_account_sid: str = Form(...),
-    twilio_auth_token: str = Form(...),
+    twilio_auth_token: str = Form(default=""),
     whatsapp_number: str = Form(...),
     twilio_content_sid: str = Form(default=""),
 ) -> Response:
@@ -805,10 +829,17 @@ async def dashboard_whatsapp_save(
             account["id"], twilio_account_sid, twilio_auth_token, number,
             status="connected", content_sid=twilio_content_sid,
         )
+    except ValueError as e:
+        return _render(
+            request, "whatsapp.html", account, active="whatsapp",
+            saved=False, error=str(e), test_result=None,
+            **_whatsapp_page_extras(request, account),
+        )
     except crypto.EncryptionNotConfigured as e:
         return _render(
             request, "whatsapp.html", account, active="whatsapp",
             saved=False, error=str(e), test_result=None,
+            **_whatsapp_page_extras(request, account),
         )
     except Exception as e:  # noqa: BLE001 - show a usable message instead of a 500
         log.exception("Saving WhatsApp credentials failed for %s: %s", account.get("slug"), e)
@@ -818,6 +849,7 @@ async def dashboard_whatsapp_save(
             error="Could not save the Twilio connection. Confirm ENCRYPTION_KEY is set "
                   "and Alembic migrations have run (whatsapp columns on accounts).",
             test_result=None,
+            **_whatsapp_page_extras(request, account),
         )
     return RedirectResponse(url="/dashboard/whatsapp?saved=1", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -838,6 +870,9 @@ def dashboard_whatsapp_test(
 ) -> dict:
     """Send a one-off test message so the agency can confirm the connection
     works before they run it against a real lead list."""
+    block = db.whatsapp_send_preflight(account)
+    if block:
+        return {"ok": False, "sid": "", "error": block}
     body = (
         f"✅ WhatsApp is connected for {account['agency_name']}. "
         f"This is a test from your AI agent, {account.get('agent_name') or 'your assistant'}."
@@ -852,10 +887,17 @@ def dashboard_whatsapp_test(
                 "2": account.get("agency_name") or "us",
             },
         )
+        phone = normalize_phone(payload.to)
+        if phone:
+            db.record_whatsapp_attempt(account["id"], phone, sid=sid, error="")
         return {"ok": True, "sid": sid, "error": ""}
     except Exception as e:  # noqa: BLE001 - report the reason in the UI
+        err = twilio_client.friendly_error(e)
         log.warning("Test message failed for %s: %s", account.get("slug"), e)
-        return {"ok": False, "sid": "", "error": twilio_client.friendly_error(e)}
+        phone = normalize_phone(payload.to)
+        if phone:
+            db.record_whatsapp_attempt(account["id"], phone, sid="", error=err)
+        return {"ok": False, "sid": "", "error": err}
 
 
 # --- Web chat demo: one shareable link per account, no WhatsApp needed ------

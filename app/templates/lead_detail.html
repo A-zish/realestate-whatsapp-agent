@@ -58,6 +58,17 @@
         <p><b>Timeline</b><br>{{ lead.timeline or "—" }}</p>
         <p><b>Last message</b><br>{{ lead.last_message or "—" }}</p>
         {% if lead.gclid %}<p class="u-muted u-sm">GCLID stored (Ads upload not in this slice)</p>{% endif %}
+        {% if lead.last_whatsapp_at or lead.last_whatsapp_sid or lead.last_whatsapp_error %}
+        <div class="u-mb-16" style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border)">
+          <p><b>Last WhatsApp attempt</b></p>
+          {% if lead.last_whatsapp_error %}
+          <div class="alert alert-error" style="margin:8px 0 0"><div>{{ lead.last_whatsapp_error }}</div></div>
+          {% elif lead.last_whatsapp_sid %}
+          <p class="u-muted u-sm">Twilio accepted · SID <code>{{ lead.last_whatsapp_sid }}</code></p>
+          {% endif %}
+          {% if lead.last_whatsapp_at %}<p class="cell-sub">{{ lead.last_whatsapp_at[:19].replace("T"," ") }} UTC</p>{% endif %}
+        </div>
+        {% endif %}
         <div class="row" style="gap:8px; margin-top:12px">
           <a class="btn btn-primary btn-sm" href="tel:{{ tel }}">Call</a>
           <a class="btn btn-secondary btn-sm" href="https://wa.me/{{ tel.replace('+','') }}" target="_blank">WhatsApp</a>

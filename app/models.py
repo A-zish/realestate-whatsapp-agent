@@ -106,6 +106,10 @@ class Lead(Base):
     gclid: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # pending | in_conversation | scored
     qualification_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    # Last outbound WhatsApp attempt (Twilio SID or friendly error).
+    last_whatsapp_sid: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_whatsapp_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_whatsapp_at: Mapped[datetime | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 

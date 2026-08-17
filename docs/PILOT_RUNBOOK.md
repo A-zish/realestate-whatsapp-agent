@@ -131,4 +131,9 @@ Invoice as **Ramatech**; product name **LeadPilot**.
 3. Are callers skipping COLD?
 4. One quote on willingness to pay
 
-If the builder will not put the link on live Ads, the pilot failed — not the model.
+See also:
+
+- [docs/PILOT_GTM_LEAD_LINK.md](PILOT_GTM_LEAD_LINK.md) — how to run 3–5 builder pilots
+- [docs/WHATSAPP_PRODUCTION_WABA.md](WHATSAPP_PRODUCTION_WABA.md) — Meta WABA when ready
+- [docs/SUBSCRIPTION_DEFERRED.md](SUBSCRIPTION_DEFERRED.md) — Razorpay after willingness to pay
+

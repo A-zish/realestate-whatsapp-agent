@@ -94,3 +94,9 @@ Every lead/property query is scoped by `account_id`. Never fall back to
 
 See [docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md). Service definition: `render.yaml`.
 Start command runs `alembic upgrade head` then uvicorn.
+
+Related ops docs:
+
+- [docs/PILOT_GTM_LEAD_LINK.md](docs/PILOT_GTM_LEAD_LINK.md)
+- [docs/WHATSAPP_PRODUCTION_WABA.md](docs/WHATSAPP_PRODUCTION_WABA.md)
+- [docs/SUBSCRIPTION_DEFERRED.md](docs/SUBSCRIPTION_DEFERRED.md)

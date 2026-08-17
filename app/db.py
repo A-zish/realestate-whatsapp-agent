@@ -143,7 +143,11 @@ def set_whatsapp_credentials(account_id, account_sid: str, auth_token: str,
         if account is None:
             raise ValueError(f"No such account: {account_id}")
         account.twilio_account_sid = account_sid.strip()
-        account.twilio_auth_token_enc = crypto.encrypt(auth_token.strip())
+        token = (auth_token or "").strip()
+        if token:
+            account.twilio_auth_token_enc = crypto.encrypt(token)
+        elif not account.twilio_auth_token_enc:
+            raise ValueError("Auth token is required the first time you connect WhatsApp.")
         account.twilio_whatsapp_from = whatsapp_from.strip()
         account.twilio_content_sid = (content_sid or "").strip() or None
         account.whatsapp_status = status
@@ -151,6 +155,39 @@ def set_whatsapp_credentials(account_id, account_sid: str, auth_token: str,
         session.refresh(account)
         log.info("Stored WhatsApp credentials for account %s (status=%s)", account_id, status)
         return _account_to_dict(account)
+
+
+def whatsapp_send_preflight(account: dict) -> str | None:
+    """Return a human-readable block reason, or None if openers may proceed."""
+    if account.get("whatsapp_status") != "connected":
+        return "Connect this agency's WhatsApp number before sending openers."
+    if not account.get("has_own_twilio"):
+        return "Save Twilio Account SID and Auth Token on the WhatsApp page first."
+    content = (account.get("twilio_content_sid") or "").strip()
+    if not content:
+        return (
+            "Content Template SID (HX…) is required for the first WhatsApp message "
+            "(Twilio trial and most production openers). Paste it from Messaging → "
+            "Try out WhatsApp or your approved template, then Save."
+        )
+    if not (account.get("twilio_whatsapp_from") or "").strip():
+        return "WhatsApp From number is missing. Save the exact From from Twilio Console."
+    return None
+
+
+def record_whatsapp_attempt(account_id, phone: str, *, sid: str = "", error: str = "") -> None:
+    """Persist the last Twilio send attempt for diagnostics on the lead page."""
+    from datetime import datetime, timezone
+
+    fields = {
+        "last_whatsapp_sid": sid or "",
+        "last_whatsapp_error": error or "",
+        "last_whatsapp_at": datetime.now(timezone.utc),
+    }
+    try:
+        update_lead_fields(account_id, phone, fields)
+    except Exception:  # noqa: BLE001 - never fail the send path on log write
+        log.exception("Could not record WhatsApp attempt for %s", phone)
 
 
 def clear_whatsapp_credentials(account_id) -> None:
@@ -276,6 +313,9 @@ def _lead_to_dict(lead: Lead) -> dict:
         "campaign": lead.campaign or "",
         "gclid": lead.gclid or "",
         "qualification_status": lead.qualification_status or "pending",
+        "last_whatsapp_sid": lead.last_whatsapp_sid or "",
+        "last_whatsapp_error": lead.last_whatsapp_error or "",
+        "last_whatsapp_at": lead.last_whatsapp_at.isoformat() if lead.last_whatsapp_at else "",
         "updated_at": lead.updated_at.isoformat() if lead.updated_at else "",
     }
 
@@ -284,6 +324,7 @@ _LEAD_FIELDS = (
     "name", "source", "status", "score", "score_reason", "stage", "intent",
     "location_pref", "property_type", "budget", "timeline", "last_message",
     "history_json", "campaign", "gclid", "qualification_status",
+    "last_whatsapp_sid", "last_whatsapp_error", "last_whatsapp_at",
 )
 
 

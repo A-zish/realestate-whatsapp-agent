@@ -3,33 +3,46 @@
 {% block heading %}WhatsApp{% endblock %}
 
 {% block content %}
+{% set c = checklist or {} %}
 
 <div class="page-head">
   <div>
-    <h1>💬 WhatsApp</h1>
-    <p class="sub">Connect your number so the AI agent can message leads directly on WhatsApp.</p>
+    <h1>WhatsApp (optional channel)</h1>
+    <p class="sub">Pilot default is the <b>web lead link</b> for Google Ads. WhatsApp needs Twilio + Meta rules — trial cannot look like your builder brand.</p>
   </div>
   <div class="page-head-actions">
     {% if account.whatsapp_status == 'connected' %}
       <span class="badge badge-accent"><span class="dot"></span>Connected</span>
-    {% elif account.whatsapp_status == 'sandbox' %}
-      <span class="badge badge-warm"><span class="dot"></span>Sandbox (testing)</span>
     {% else %}
       <span class="badge badge-neutral">Not connected</span>
     {% endif %}
   </div>
 </div>
 
-{% if saved %}<div class="alert alert-success">WhatsApp credentials saved. Send yourself a test message below to confirm.</div>{% endif %}
+{% if saved %}<div class="alert alert-success">WhatsApp credentials saved. Send a test to a <b>verified</b> number before openers.</div>{% endif %}
 {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+{% if preflight %}
+<div class="alert alert-info u-mb-16">
+  <span>⛔</span>
+  <div><b>Cannot send openers yet:</b> {{ preflight }}</div>
+</div>
+{% endif %}
+
+<div class="alert alert-info u-mb-16">
+  <span>🔗</span>
+  <div>
+    Prefer the pilot path: put your
+    <a href="{{ c.lead_link or lead_link }}" target="_blank">lead link</a>
+    on Google Ads. Callers dial HOT/WARM only. Ops runbook: <code>docs/PILOT_RUNBOOK.md</code> in the repo.
+  </div>
+</div>
 
 <div class="grid grid-2-1">
 
   <div class="stack">
-    <!-- Connection form -->
     <div class="card">
       <div class="card-head">
-        <div><h2>Connect your Twilio account</h2><div class="sub">Your credentials are encrypted before they're stored</div></div>
+        <div><h2>Connect Twilio</h2><div class="sub">Encrypted at rest. From + ContentSid must match Console.</div></div>
       </div>
       <div class="card-body">
         <form action="/dashboard/whatsapp" method="post">
@@ -37,25 +50,24 @@
             <label>Twilio Account SID</label>
             <input class="input" name="twilio_account_sid" required placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                    value="{{ account.twilio_account_sid or '' }}">
-            <div class="hint">Twilio Console → Account Info</div>
           </div>
           <div class="field">
             <label>Twilio Auth Token</label>
-            <input class="input" type="password" name="twilio_auth_token" required
-                   placeholder="{% if account.has_own_twilio %}•••••••• (saved — retype to change){% else %}Your auth token{% endif %}">
-            <div class="hint">Stored encrypted. We never show it again after saving.</div>
-          </div>
-            <div class="field">
-            <label>Your WhatsApp number</label>
-            <input class="input" name="whatsapp_number" required placeholder="+14155238886"
-                   value="{{ (account.twilio_whatsapp_from or '').replace('whatsapp:','') }}">
-            <div class="hint">The approved WhatsApp Business number, or the Twilio sandbox / trial From number.</div>
+            <input class="input" type="password" name="twilio_auth_token"
+                   placeholder="{% if account.has_own_twilio %}•••••••• (saved — leave blank to keep){% else %}Your auth token{% endif %}"
+                   {% if not account.has_own_twilio %}required{% endif %}>
           </div>
           <div class="field">
-            <label>Content Template SID (required on Twilio trial)</label>
-            <input class="input" name="twilio_content_sid" placeholder="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            <label>WhatsApp From number</label>
+            <input class="input" name="whatsapp_number" required placeholder="+17372508034"
+                   value="{{ (account.twilio_whatsapp_from or '').replace('whatsapp:','') }}">
+            <div class="hint">Exact From from Try out WhatsApp / WhatsApp Senders — not your personal +91.</div>
+          </div>
+          <div class="field">
+            <label>Content Template SID (HX…)</label>
+            <input class="input" name="twilio_content_sid" required placeholder="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                    value="{{ account.twilio_content_sid or '' }}">
-            <div class="hint">Console → Messaging → Try out WhatsApp. Copy the <b>ContentSid</b> (starts with HX) from the sample API request. Trial accounts cannot send free-text Body.</div>
+            <div class="hint">Trial and first outbound need this. Free-text Body is rejected. Your opener text is replaced by the template body.</div>
           </div>
           <button type="submit" class="btn btn-primary">Save connection</button>
           {% if account.has_own_twilio %}
@@ -66,69 +78,67 @@
       </div>
     </div>
 
-    <!-- Test message -->
     <div class="card">
       <div class="card-head">
-        <div><h2>Send a test message</h2><div class="sub">Confirm the connection works before messaging real leads</div></div>
+        <div><h2>Send a test</h2><div class="sub">Only to a number verified in Twilio Try out WhatsApp (trial)</div></div>
       </div>
       <div class="card-body">
         <div class="row" style="gap:8px">
-          <input id="testTo" class="input" placeholder="+919812345678" style="flex:1">
-          <button class="btn btn-secondary" onclick="sendTest()">Send test</button>
+          <input id="testTo" class="input" placeholder="+917891323775" style="flex:1">
+          <button class="btn btn-secondary" onclick="sendTest()" {% if preflight %}disabled{% endif %}>Send test</button>
         </div>
         <div id="testResult" style="margin-top:12px"></div>
       </div>
     </div>
 
-    <!-- Send openers -->
     <div class="card">
       <div class="card-head">
-        <div><h2>Message your new leads</h2><div class="sub">Sends the opening message to every lead with status “new”</div></div>
+        <div><h2>Openers to pending leads</h2><div class="sub">Max 10. Delete dummy CSV rows first. Trial = Twilio Trial branding.</div></div>
       </div>
       <div class="card-body">
-        <button class="btn btn-primary" onclick="sendOpeners()" id="openerBtn">Send openers to new leads</button>
+        <button class="btn btn-primary" onclick="sendOpeners()" id="openerBtn" {% if preflight %}disabled{% endif %}>Send openers to pending leads</button>
         <div id="openerResult" style="margin-top:14px"></div>
       </div>
     </div>
   </div>
 
-  <!-- What you need -->
   <div class="stack">
     <div class="card">
-      <div class="card-head"><div><h2>What you need</h2></div></div>
+      <div class="card-head"><div><h2>Readiness checklist</h2></div></div>
       <div class="card-body">
-        <h3 style="margin-bottom:6px">🧪 For testing (today, free)</h3>
-        <p class="u-muted u-sm u-mb-16">
-          Twilio <b>trial</b> WhatsApp is not the old sandbox free-text send. You must:
-          (1) verify each friend’s number in <b>Try out WhatsApp</b> (max 5),
-          (2) paste the trial <b>ContentSid</b> (HX…) above,
-          (3) use the From number shown on that same page.
-          Join-code alone is not enough on a new trial account.
-        </p>
-
-        <h3 style="margin-bottom:6px">🏢 For production (real leads)</h3>
-        <p class="u-muted u-sm" style="margin-bottom:8px">A verified WhatsApp Business number. You'll need:</p>
-        <ul class="u-muted u-sm" style="margin:0 0 14px; padding-left:18px; line-height:1.9">
-          <li>A phone number <b>not</b> active on regular WhatsApp</li>
-          <li>A Meta Business Manager account</li>
-          <li>Business verification — registration certificate &amp; address proof</li>
-          <li>An approved display name (your agency name)</li>
-          <li>An approved message template for the first message</li>
+        <ul class="u-sm" style="margin:0; padding-left:0; list-style:none; line-height:2">
+          <li>{% if c.encryption %}✓{% else %}○{% endif %} ENCRYPTION_KEY on host</li>
+          <li>{% if c.has_creds %}✓{% else %}○{% endif %} Twilio SID + token saved</li>
+          <li>{% if c.has_from %}✓{% else %}○{% endif %} From number saved</li>
+          <li>{% if c.has_content_sid %}✓{% else %}○{% endif %} ContentSid (HX…) saved</li>
+          <li>{% if c.connected %}✓{% else %}○{% endif %} Status = connected</li>
+          <li>{% if c.public_https %}✓{% else %}○{% endif %} Public HTTPS for inbound webhook
+            {% if c.webhook_url %}<div class="cell-sub">{{ c.webhook_url }}</div>{% endif %}
+          </li>
         </ul>
-        <div class="alert alert-info" style="margin:0">
-          <span>⏱️</span>
-          <div>Meta's review usually takes <b>1–3 days</b>. Until it's approved, your web lead link keeps
-            working normally — leads still get qualified.</div>
-        </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-head"><div><h2>The 24-hour rule</h2></div></div>
+      <div class="card-head"><div><h2>Trial vs production</h2></div></div>
       <div class="card-body">
-        <p class="u-muted u-sm">WhatsApp only allows free-form messages within <b>24 hours</b> of a lead's last
-          reply. Outside that window the first message must be a pre-approved template. Your AI agent's
-          replies during a live conversation are always inside this window.</p>
+        <h3 style="margin-bottom:6px">Twilio trial (today)</h3>
+        <p class="u-muted u-sm u-mb-16">
+          Chat shows <b>Twilio Trial</b>. Template text is whatever HX… is (often an appointment sample — not your builder opener).
+          Recipients must be <b>verified</b> in Console (max 5). Error 572002 = not verified. 50 msgs/day limit.
+        </p>
+        <h3 style="margin-bottom:6px">Production (Meta WABA)</h3>
+        <p class="u-muted u-sm">
+          Business display name, approved opener template, number not on consumer WhatsApp,
+          webhook → this app’s <code>/webhook</code>. Then AI can reply inside the 24h window.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>24-hour rule</h2></div></div>
+      <div class="card-body">
+        <p class="u-muted u-sm">First message outside a customer session must be a template (ContentSid). Free text only after the lead replies, within 24 hours.</p>
       </div>
     </div>
   </div>
@@ -149,13 +159,14 @@
     });
     const d = await res.json();
     box.innerHTML = d.ok
-      ? '<div class="alert alert-success" style="margin:0"><span>✓</span><div>Sent! Check WhatsApp on that number.</div></div>'
+      ? '<div class="alert alert-success" style="margin:0"><span>✓</span><div>Twilio accepted (SID ' + (d.sid || "") + '). Check WhatsApp — chat may still say Twilio Trial.</div></div>'
       : '<div class="alert alert-error" style="margin:0"><span>⚠️</span><div>' + d.error + '</div></div>';
   }
 
   async function sendOpeners() {
     const btn = document.getElementById("openerBtn");
     const box = document.getElementById("openerResult");
+    if (!confirm("Send openers to pending leads (max 10)? On trial, only verified recipients get delivery.")) return;
     btn.disabled = true; btn.textContent = "Sending…";
     box.innerHTML = "";
     try {
@@ -169,15 +180,15 @@
         return;
       }
       if (!d.results.length) {
-        box.innerHTML = '<div class="alert alert-info" style="margin:0"><span>ℹ️</span><div>No leads with status “new”. <a href="/dashboard/import" style="color:inherit;text-decoration:underline">Import some leads</a> first.</div></div>';
+        box.innerHTML = '<div class="alert alert-info" style="margin:0"><span>ℹ️</span><div>No pending leads. <a href="/dashboard/import">Import</a> or use the lead link.</div></div>';
       } else {
         let html = '<div class="alert ' + (d.failed ? 'alert-info' : 'alert-success') + '"><span>' + (d.failed ? 'ℹ️' : '✓') +
-          '</span><div><b>' + d.sent + ' sent</b>' + (d.failed ? ', ' + d.failed + ' failed' : '') + '</div></div>';
+          '</span><div><b>' + d.sent + ' accepted by Twilio</b>' + (d.failed ? ', ' + d.failed + ' failed' : '') + '</div></div>';
         html += '<div class="table-wrap"><table class="data"><thead><tr><th>Lead</th><th>Status</th></tr></thead><tbody>';
         d.results.forEach(function (r) {
           html += '<tr><td><div class="cell-primary">' + r.name + '</div><div class="cell-sub">' + r.phone + '</div></td>' +
             '<td>' + (r.ok
-              ? '<span class="badge badge-accent">✓ Sent</span>'
+              ? '<span class="badge badge-accent">✓ ' + (r.sid || "Sent") + '</span>'
               : '<span class="badge badge-hot">Failed</span><div class="cell-sub">' + r.error + '</div>') +
             '</td></tr>';
         });
@@ -187,7 +198,7 @@
     } catch (e) {
       box.innerHTML = '<div class="alert alert-error" style="margin:0">Something went wrong — try again.</div>';
     }
-    btn.disabled = false; btn.textContent = "Send openers to new leads";
+    btn.disabled = false; btn.textContent = "Send openers to pending leads";
   }
 </script>
 {% endblock %}
